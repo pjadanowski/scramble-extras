@@ -39,12 +39,21 @@ class LaravelDataTypeToSchemaExtension extends TypeToSchemaExtension
         }
 
         /** @var ObjectType $type */
-        return $this->reflector()->buildSchema($type->name, input: false);
+        return $this->reflector()->buildSchema(
+            $type->name,
+            input: LaravelDataReflector::shouldInlineAsInput($type),
+        );
     }
 
-    public function reference(ObjectType $type): Reference
+    /**
+     * Output schemas are reusable components. Inside a request body, nested
+     * Data are inlined with their input projection instead (no reference).
+     */
+    public function reference(ObjectType $type): ?Reference
     {
-        DataClassNameRegistry::register($type->name);
+        if (LaravelDataReflector::shouldInlineAsInput($type)) {
+            return null;
+        }
 
         return ClassBasedReference::create('schemas', $type->name, $this->components);
     }

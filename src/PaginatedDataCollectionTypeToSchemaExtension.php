@@ -8,7 +8,6 @@ use Dedoc\Scramble\Support\Generator\Schema;
 use Dedoc\Scramble\Support\Generator\Types\ArrayType as OpenApiArrayType;
 use Dedoc\Scramble\Support\Generator\Types\BooleanType as OpenApiBooleanType;
 use Dedoc\Scramble\Support\Generator\Types\IntegerType as OpenApiIntegerType;
-use Dedoc\Scramble\Support\Generator\Types\NullType as OpenApiNullType;
 use Dedoc\Scramble\Support\Generator\Types\ObjectType as OpenApiObjectType;
 use Dedoc\Scramble\Support\Generator\Types\StringType as OpenApiStringType;
 use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
@@ -17,8 +16,16 @@ use Dedoc\Scramble\Support\Type\ObjectType as ScrambleObjectType;
 use Dedoc\Scramble\Support\Type\Type;
 use Spatie\LaravelData\PaginatedDataCollection;
 
+/**
+ * Renders `Spatie\LaravelData\PaginatedDataCollection<T>` as the envelope
+ * spatie/laravel-data returns for it: `data`, `links` (the paginator's link
+ * list) and `meta` (page numbers and URLs). Note this is not the
+ * JsonResource envelope: `links` is a list, and the page URLs live in `meta`.
+ */
 class PaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
 {
+    use ResolvesDataCollectionItems;
+
     public function shouldHandle(Type $type): bool
     {
         if ($type instanceof Generic && is_a($type->name, PaginatedDataCollection::class, true)) {
@@ -53,74 +60,49 @@ class PaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
     }
 
     /**
-     * The item type is always the last template parameter: spatie/laravel-data
-     * declares these collections as `<TKey of array-key, TValue>` (matching
-     * Illuminate\Support\Collection), so a spec-correct two-argument generic
-     * like `PaginatedDataCollection<int, ProductData>` carries the Data class
-     * at index 1, not 0. Flow-inferred generics (no docblock, resolved from a
-     * `Data::collect()` call) only ever carry the single value type, at index 0
-     * — which is also "last" — so this covers both shapes.
+     * The paginator's link collection, as returned by
+     * LengthAwarePaginator::linkCollection(): a list of page links.
      */
-    protected function getItemClass(Type $type): ?string
+    protected function linksObject(): OpenApiArrayType
     {
-        if (! $type instanceof Generic || $type->templateTypes === []) {
-            return null;
-        }
-
-        $inner = end($type->templateTypes);
-
-        if ($inner instanceof ScrambleObjectType && class_exists($inner->name)) {
-            return $inner->name;
-        }
-
-        return null;
-    }
-
-    protected function getItemSchema(Type $type): OpenApiType
-    {
-        $itemClass = $this->getItemClass($type);
-        if ($itemClass === null) {
-            return new OpenApiObjectType;
-        }
-
-        return $this->openApiTransformer->transform(new ScrambleObjectType($itemClass));
-    }
-
-    protected function linksObject(): OpenApiObjectType
-    {
-        $object = new OpenApiObjectType;
-
-        $nullableUrl = (new OpenApiStringType)->format('uri')->nullable(true);
-        $object
-            ->addProperty('first', $nullableUrl)
-            ->addProperty('last', $nullableUrl)
-            ->addProperty('prev', $nullableUrl)
-            ->addProperty('next', $nullableUrl);
-
-        return $object;
-    }
-
-    protected function metaObject(): OpenApiObjectType
-    {
-        $object = new OpenApiObjectType;
-
-        $object
-            ->addProperty('current_page', new OpenApiIntegerType)
-            ->addProperty('from', (new OpenApiIntegerType)->nullable(true))
-            ->addProperty('last_page', new OpenApiIntegerType)
-            ->addProperty('path', (new OpenApiStringType)->format('uri'))
-            ->addProperty('per_page', new OpenApiIntegerType)
-            ->addProperty('to', (new OpenApiIntegerType)->nullable(true))
-            ->addProperty('total', new OpenApiIntegerType);
-
-        $linkObject = new OpenApiObjectType;
-        $linkObject
+        $link = new OpenApiObjectType;
+        $link
             ->addProperty('url', (new OpenApiStringType)->format('uri')->nullable(true))
             ->addProperty('label', new OpenApiStringType)
-            ->addProperty('active', new OpenApiBooleanType);
+            // Added to linkCollection() in newer Laravel versions.
+            ->addProperty('page', (new OpenApiIntegerType)->nullable(true))
+            ->addProperty('active', new OpenApiBooleanType)
+            ->setRequired(['url', 'label', 'active']);
 
-        $object->addProperty('links', (new OpenApiArrayType)->setItems($linkObject));
+        return (new OpenApiArrayType)->setItems($link);
+    }
 
-        return $object;
+    /**
+     * Mirrors TransformedDataCollectableResolver::resolveLengthAwarePaginatorLinksAndMeta().
+     */
+    protected function metaObject(): OpenApiObjectType
+    {
+        $url = fn () => (new OpenApiStringType)->format('uri');
+
+        $properties = [
+            'current_page' => new OpenApiIntegerType,
+            'first_page_url' => $url(),
+            'from' => (new OpenApiIntegerType)->nullable(true),
+            'last_page' => new OpenApiIntegerType,
+            'last_page_url' => $url(),
+            'next_page_url' => $url()->nullable(true),
+            'path' => $url(),
+            'per_page' => new OpenApiIntegerType,
+            'prev_page_url' => $url()->nullable(true),
+            'to' => (new OpenApiIntegerType)->nullable(true),
+            'total' => new OpenApiIntegerType,
+        ];
+
+        $object = new OpenApiObjectType;
+        foreach ($properties as $name => $type) {
+            $object->addProperty($name, $type);
+        }
+
+        return $object->setRequired(array_keys($properties));
     }
 }

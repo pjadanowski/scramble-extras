@@ -16,6 +16,12 @@ class AttributeAnalysis
 
     public ?bool $forceRequired = null;
 
+    /**
+     * Whether the property is an uploaded file: Laravel's size rules
+     * (min/max/size/between) then count kilobytes, not characters.
+     */
+    public bool $isFile = false;
+
     public function __construct(public OpenApiType $type)
     {
     }

@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Schema cache served broken and stale schemas.** With the cache on (the
+  default), a warm cache stripped all properties from components and
+  request bodies, and its entries were effectively never reused. Only
+  response schemas are cached now; an entry is invalidated when the Data
+  class, a parent class, a trait or a class named in its attributes
+  changes, or when Scramble, laravel-data or this package is upgraded.
+- **`#[GreaterThan]`, `#[LessThan]`, `#[MultipleOf]`** never reached the
+  generated document (`exclusiveMinimum` / `exclusiveMaximum` / `multipleOf`).
+- **Property names** now follow laravel-data's own mapping: `MapName(input,
+  output)`, `MapInputName`, `MapOutputName` (property or class) and
+  `data.name_mapping_strategy`. Several of these were wrong or ignored.
+- **Paginated envelopes** now match what laravel-data returns:
+  `PaginatedDataCollection` has `links` as a list and the page URLs in
+  `meta`; `CursorPaginatedDataCollection` nests the cursors under `meta`.
+- **`Data` arguments on GET/DELETE/HEAD** are documented as query
+  parameters instead of an invalid `in: body` parameter.
+- **PHPDoc types with spaces** in constructor `@param` tags (e.g.
+  `array<string, mixed>`) and multi-line `@var` array shapes are read
+  correctly.
+- **`#[MinDigits]`/`#[MaxDigits]`/`#[Digits]`/`#[DigitsBetween]` on `int`**
+  bound the value instead of emitting the digit count as `minimum`/`maximum`.
+- **`#[Min]`/`#[Max]`/`#[Size]` on arrays** set `minItems`/`maxItems`; on
+  uploaded files they are described in kilobytes instead of emitted as
+  string lengths.
+- **Query builder:** filters with chained modifiers
+  (`AllowedFilter::exact('x')->default(...)`), `AllowedSort::*` and
+  `AllowedInclude::*` entries are documented; implicit `{relation}Count` /
+  `{relation}Exists` includes are listed; exact-filter enums are detected
+  from `casts()` and from the internal column of an aliased filter.
+- **Nested `Data` in request bodies** use their own input projection
+  instead of referencing the output component.
+- **Response schemas** mark nullable and defaulted properties as required
+  (laravel-data always writes them).
+- **Native union types** (`int|string|null`) document every member.
+- **`#[Regex]` with modifiers** and **`#[DateFormat]`** are no longer
+  documented with a different meaning.
+
+### Removed
+- **Laravel 11 support.** Every 11.x release has unpatched security
+  advisories, so it can no longer be installed or tested.
+- `DataClassNameRegistry` (internal; no longer used by the cache).
+
+## [0.5.0] - 2026-11-22
+
+### Fixed
 - **Query-builder parameters missing from the spec.** `filter[...]`, `sort`,
   `include` and `fields[...]` were never documented: Scramble collects
   operation extensions from its global extension list once, while its own
@@ -103,7 +148,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation attributes, paginated/cursor/plain Data collections, Spatie Laravel
   Query Builder parameter extraction, and a persistent schema cache.
 
-[Unreleased]: https://github.com/pjadanowski/scramble-extras/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/pjadanowski/scramble-extras/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/pjadanowski/scramble-extras/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/pjadanowski/scramble-extras/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/pjadanowski/scramble-extras/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/pjadanowski/scramble-extras/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pjadanowski/scramble-extras/releases/tag/v0.1.0

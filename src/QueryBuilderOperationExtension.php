@@ -94,9 +94,10 @@ class QueryBuilderOperationExtension extends OperationExtension
             $parameters[] = $param;
         }
 
-        if ($finder->includes !== []) {
+        $includes = $this->expandIncludes($finder->includeEntries);
+        if ($includes !== []) {
             $description = 'Include related resources. Multiple values can be passed, separated via `,`. Allowed: `'
-                .implode('`, `', $finder->includes).'`';
+                .implode('`, `', $includes).'`';
 
             $parameters[] = (new Parameter('include', 'query'))
                 ->description($description)
@@ -127,7 +128,7 @@ class QueryBuilderOperationExtension extends OperationExtension
     }
 
     /**
-     * @param  array{name: string, kind: string, description?: string, example?: mixed, format?: string}  $filter
+     * @param  array{name: string, kind: string, column?: string, description?: string, example?: mixed, format?: string}  $filter
      * @param  array<string, array<int, scalar>>  $modelEnumCasts
      */
     protected function buildFilterParameter(array $filter, array $modelEnumCasts): Parameter
@@ -138,9 +139,11 @@ class QueryBuilderOperationExtension extends OperationExtension
             $type->format($filter['format']);
         }
 
-        // exact filter on an enum-cast column → emit enum schema.
-        if ($filter['kind'] === 'exact' && isset($modelEnumCasts[$filter['name']])) {
-            $type->enum($modelEnumCasts[$filter['name']]);
+        // exact filter on an enum-cast column → emit enum schema. An aliased
+        // filter (`exact('state', 'status')`) is cast by its internal column.
+        $column = $filter['column'] ?? $filter['name'];
+        if ($filter['kind'] === 'exact' && isset($modelEnumCasts[$column])) {
+            $type->enum($modelEnumCasts[$column]);
         }
 
         $description = $this->describeFilter($filter);
@@ -195,6 +198,13 @@ class QueryBuilderOperationExtension extends OperationExtension
                 return [];
             }
             $casts = $instance->getCasts();
+
+            // Laravel 11+ declares casts in a casts() method, merged into
+            // $casts by the model constructor - which isn't run here.
+            if (method_exists($instance, 'casts')) {
+                $castsMethod = new \ReflectionMethod($instance, 'casts');
+                $casts = array_merge($casts, (array) $castsMethod->invoke($instance));
+            }
         } catch (\Throwable) {
             return [];
         }
@@ -222,6 +232,70 @@ class QueryBuilderOperationExtension extends OperationExtension
         }
 
         return $result;
+    }
+
+    /**
+     * The include names the query builder actually allows for the declared
+     * includes (same rules in spatie/laravel-query-builder 6 and 7):
+     *  - a string ending in the count/exists suffix allows only itself;
+     *  - any other string allows every segment of its path (`a.b` allows `a`
+     *    and `a.b`) plus `{segment}Count` / `{segment}Exists` for the
+     *    top-level segment;
+     *  - AllowedInclude::relationship() expands the same way in v6, and
+     *    allows only its own name in v7;
+     *  - other builders (count, exists, callback, custom) allow their name.
+     *
+     * @param  array<int, array{name: string, kind: string}>  $entries
+     * @return array<int, string>
+     */
+    protected function expandIncludes(array $entries): array
+    {
+        $countSuffix = config('query-builder.suffixes.count') ?? config('query-builder.count_suffix') ?? 'Count';
+        $existsSuffix = config('query-builder.suffixes.exists') ?? config('query-builder.exists_suffix') ?? 'Exists';
+
+        $includes = [];
+
+        foreach ($entries as ['name' => $name, 'kind' => $kind]) {
+            $expands = match ($kind) {
+                'string' => ! str_ends_with($name, $countSuffix) && ! str_ends_with($name, $existsSuffix),
+                'relationship' => $this->relationshipBuilderExpands(),
+                default => false,
+            };
+
+            if (! $expands) {
+                $includes[] = $name;
+
+                continue;
+            }
+
+            $path = [];
+            foreach (explode('.', $name) as $segment) {
+                $path[] = $segment;
+                $includes[] = implode('.', $path);
+
+                if (count($path) === 1) {
+                    $includes[] = $segment.$countSuffix;
+                    $includes[] = $segment.$existsSuffix;
+                }
+            }
+        }
+
+        return array_values(array_unique($includes));
+    }
+
+    /**
+     * In v6, AllowedInclude::relationship() returns a collection of the
+     * relationship plus its count/exists includes; in v7 a single include.
+     */
+    protected function relationshipBuilderExpands(): bool
+    {
+        if (! class_exists(\Spatie\QueryBuilder\AllowedInclude::class)) {
+            return false;
+        }
+
+        $returnType = (new \ReflectionMethod(\Spatie\QueryBuilder\AllowedInclude::class, 'relationship'))->getReturnType();
+
+        return $returnType instanceof \ReflectionNamedType && is_a($returnType->getName(), \Illuminate\Support\Collection::class, true);
     }
 
     /**

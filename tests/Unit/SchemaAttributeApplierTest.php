@@ -2,6 +2,7 @@
 
 namespace PawelJadanowski\ScrambleExtras\Tests\Unit;
 
+use Dedoc\Scramble\Support\Generator\Types\ArrayType;
 use Dedoc\Scramble\Support\Generator\Types\IntegerType;
 use Dedoc\Scramble\Support\Generator\Types\StringType;
 use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
@@ -257,5 +258,117 @@ class SchemaAttributeApplierTest extends TestCase
         } else {
             $this->assertSame('Ada Lovelace', $array['example'] ?? null);
         }
+    }
+
+    #[Test]
+    public function min_and_max_digits_on_integer_bound_the_value(): void
+    {
+        $this->assertSame(100, $this->analyze('minDigitsInt', new IntegerType)->type->toArray()['minimum'] ?? null);
+        $this->assertSame(9999, $this->analyze('maxDigitsInt', new IntegerType)->type->toArray()['maximum'] ?? null);
+    }
+
+    #[Test]
+    public function digits_on_integer_bound_the_value(): void
+    {
+        $exact = $this->analyze('digitsInt', new IntegerType)->type->toArray();
+        $this->assertSame([1000, 9999], [$exact['minimum'] ?? null, $exact['maximum'] ?? null]);
+
+        $between = $this->analyze('digitsBetweenInt', new IntegerType)->type->toArray();
+        $this->assertSame([10, 9999], [$between['minimum'] ?? null, $between['maximum'] ?? null]);
+    }
+
+    #[Test]
+    public function min_max_and_size_on_array_bound_the_item_count(): void
+    {
+        $this->assertSame(1, $this->analyze('minItems', new ArrayType)->type->toArray()['minItems'] ?? null);
+        $this->assertSame(5, $this->analyze('maxItems', new ArrayType)->type->toArray()['maxItems'] ?? null);
+
+        $size = $this->analyze('sizeItems', new ArrayType)->type->toArray();
+        $this->assertSame([2, 2], [$size['minItems'] ?? null, $size['maxItems'] ?? null]);
+    }
+
+    #[Test]
+    public function distinct_is_a_note_not_unique_items(): void
+    {
+        // On a non-wildcard property, Laravel's `distinct` doesn't enforce
+        // unique items, so it must not be documented as uniqueItems.
+        $analysis = $this->analyze('distinctItems', new ArrayType);
+
+        $this->assertArrayNotHasKey('uniqueItems', $analysis->type->toArray());
+        $this->assertContains('All array items must be distinct.', $analysis->notes);
+    }
+
+    #[Test]
+    public function max_on_a_file_is_kilobytes_not_string_length(): void
+    {
+        foreach (['upload', 'fileByAttribute'] as $property) {
+            $analysis = $this->analyze($property, new StringType);
+
+            $this->assertArrayNotHasKey('maxLength', $analysis->type->toArray(), $property);
+            $this->assertStringContainsString('kilobytes', implode(' ', $analysis->notes), $property);
+        }
+    }
+
+    #[Test]
+    public function regex_with_flags_becomes_a_note_not_a_wrong_pattern(): void
+    {
+        $analysis = $this->analyze('caseInsensitiveRegex', new StringType);
+
+        $this->assertArrayNotHasKey('pattern', $analysis->type->toArray());
+        $this->assertStringContainsString('/^[a-z]+$/i', implode(' ', $analysis->notes));
+    }
+
+    #[Test]
+    public function regex_with_bracket_delimiters_is_unwrapped(): void
+    {
+        $this->assertSame('^\d+$', $this->analyze('braceDelimitedRegex', new StringType)->type->toArray()['pattern'] ?? null);
+    }
+
+    #[Test]
+    public function date_format_maps_to_openapi_formats_or_a_note(): void
+    {
+        $this->assertSame('date', $this->analyze('isoDate', new StringType)->type->toArray()['format'] ?? null);
+        $this->assertSame('date-time', $this->analyze('isoDateTime', new StringType)->type->toArray()['format'] ?? null);
+
+        $custom = $this->analyze('customDate', new StringType);
+        $this->assertArrayNotHasKey('format', $custom->type->toArray());
+        $this->assertStringContainsString('d/m/Y', implode(' ', $custom->notes));
+    }
+
+    #[Test]
+    public function integer_example_stays_an_integer_after_a_constraint_upgrade(): void
+    {
+        $property = new ReflectionProperty(ValidationFixtures::class, 'positiveWithExample');
+        $applier = new SchemaAttributeApplier;
+
+        $analysis = $applier->analyze($property, new IntegerType);
+        $applier->applyExamplesFromPhpDoc($property, $analysis->type);
+
+        $array = $analysis->type->toArray();
+        $this->assertSame('integer', $array['type']);
+        $this->assertSame(5, $array['examples'][0] ?? $array['example'] ?? null);
+    }
+
+    #[Test]
+    public function unmapped_date_format_removes_an_existing_format(): void
+    {
+        // Scramble documents Carbon as `format: date-time`.
+        $type = (new StringType)->format('date-time');
+
+        $this->assertArrayNotHasKey('format', $this->analyze('customDateOnDateTime', $type)->type->toArray());
+    }
+
+    #[Test]
+    public function time_without_offset_is_not_the_rfc3339_time_format(): void
+    {
+        $this->assertArrayNotHasKey('format', $this->analyze('timeWithoutOffset', new StringType)->type->toArray());
+    }
+
+    #[Test]
+    public function digit_bounds_apply_after_a_constraint_upgrade(): void
+    {
+        $array = $this->analyze('multipleOfThenDigits', new IntegerType)->type->toArray();
+
+        $this->assertSame([100, 999, 5], [$array['minimum'] ?? null, $array['maximum'] ?? null, $array['multipleOf'] ?? null]);
     }
 }

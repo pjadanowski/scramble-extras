@@ -22,8 +22,8 @@ use PawelJadanowski\ScrambleExtras\Console\Commands\ClearSchemaCacheCommand;
  *    Scramble snapshots OperationExtension classes from its global list when
  *    its own provider boots, before this one, so registerExtensions() would
  *    never reach that pipeline.
- *  - Binds the SchemaCache singleton (file-backed, per-class mtime
- *    invalidation) and registers the cache:clear artisan command.
+ *  - Binds the SchemaCache singleton (file-backed, invalidated per class
+ *    from its source files) and registers the cache:clear artisan command.
  */
 class ScrambleExtrasServiceProvider extends ServiceProvider
 {

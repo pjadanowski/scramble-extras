@@ -57,7 +57,21 @@ class CachedSchemaType extends OpenApiObjectType
         return $this;
     }
 
+    /**
+     * Scramble serializes through serializeAs31()/serializeAs32() (older
+     * versions through toArray()), so all three must return the cached form.
+     */
     public function toArray()
+    {
+        return $this->cachedArray;
+    }
+
+    public function serializeAs31(): mixed
+    {
+        return $this->cachedArray;
+    }
+
+    public function serializeAs32(): mixed
     {
         return $this->cachedArray;
     }

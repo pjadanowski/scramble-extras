@@ -11,17 +11,19 @@ use Dedoc\Scramble\Support\Generator\Types\ObjectType as OpenApiObjectType;
 use Dedoc\Scramble\Support\Generator\Types\StringType as OpenApiStringType;
 use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
 use Dedoc\Scramble\Support\Type\Generic;
-use Dedoc\Scramble\Support\Type\ObjectType as ScrambleObjectType;
 use Dedoc\Scramble\Support\Type\Type;
 use Spatie\LaravelData\CursorPaginatedDataCollection;
 
 /**
  * Renders `Spatie\LaravelData\CursorPaginatedDataCollection<T>` as the
- * standard Laravel cursor-paginator envelope (data + path + per_page +
- * next_cursor / prev_cursor + page urls).
+ * envelope spatie/laravel-data returns for it: `data`, an always-empty
+ * `links` list, and `meta` with the cursors and page URLs (mirrors
+ * TransformedDataCollectableResolver::resolveCursorPaginatorLinksAndMeta()).
  */
 class CursorPaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
 {
+    use ResolvesDataCollectionItems;
+
     public function shouldHandle(Type $type): bool
     {
         return $type instanceof Generic
@@ -33,16 +35,26 @@ class CursorPaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExt
     {
         $itemSchema = $this->getItemSchema($type);
 
+        $meta = new OpenApiObjectType;
+        $metaProperties = [
+            'path' => (new OpenApiStringType)->format('uri'),
+            'per_page' => new OpenApiIntegerType,
+            'next_cursor' => (new OpenApiStringType)->nullable(true),
+            'next_page_url' => (new OpenApiStringType)->format('uri')->nullable(true),
+            'prev_cursor' => (new OpenApiStringType)->nullable(true),
+            'prev_page_url' => (new OpenApiStringType)->format('uri')->nullable(true),
+        ];
+        foreach ($metaProperties as $name => $propertyType) {
+            $meta->addProperty($name, $propertyType);
+        }
+        $meta->setRequired(array_keys($metaProperties));
+
         $object = new OpenApiObjectType;
         $object
             ->addProperty('data', (new OpenApiArrayType)->setItems($itemSchema))
-            ->addProperty('path', (new OpenApiStringType)->format('uri'))
-            ->addProperty('per_page', new OpenApiIntegerType)
-            ->addProperty('next_cursor', (new OpenApiStringType)->nullable(true))
-            ->addProperty('next_page_url', (new OpenApiStringType)->format('uri')->nullable(true))
-            ->addProperty('prev_cursor', (new OpenApiStringType)->nullable(true))
-            ->addProperty('prev_page_url', (new OpenApiStringType)->format('uri')->nullable(true))
-            ->setRequired(['data', 'path', 'per_page']);
+            ->addProperty('links', (new OpenApiArrayType)->setDescription('Always empty for cursor pagination.'))
+            ->addProperty('meta', $meta)
+            ->setRequired(['data', 'links', 'meta']);
 
         return $object;
     }
@@ -52,39 +64,5 @@ class CursorPaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExt
         return Response::make(200)
             ->description('Cursor-paginated set of data')
             ->setContent('application/json', Schema::fromType($this->toSchema($type)));
-    }
-
-    /**
-     * The item type is always the last template parameter: spatie/laravel-data
-     * declares this collection as `<TKey of array-key, TValue>` (matching
-     * Illuminate\Support\Collection), so a spec-correct two-argument generic
-     * like `CursorPaginatedDataCollection<int, ProductData>` carries the Data
-     * class at index 1, not 0. Flow-inferred generics (no docblock, resolved
-     * from a `Data::collect()` call) only ever carry the single value type, at
-     * index 0 — which is also "last" — so this covers both shapes.
-     */
-    protected function getItemClass(Type $type): ?string
-    {
-        if (! $type instanceof Generic || $type->templateTypes === []) {
-            return null;
-        }
-
-        $inner = end($type->templateTypes);
-
-        if ($inner instanceof ScrambleObjectType && class_exists($inner->name)) {
-            return $inner->name;
-        }
-
-        return null;
-    }
-
-    protected function getItemSchema(Type $type): OpenApiType
-    {
-        $itemClass = $this->getItemClass($type);
-        if ($itemClass === null) {
-            return new OpenApiObjectType;
-        }
-
-        return $this->openApiTransformer->transform(new ScrambleObjectType($itemClass));
     }
 }

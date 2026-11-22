@@ -32,6 +32,7 @@ class SchemaAttributeApplier
     public function analyze(ReflectionProperty $property, OpenApiType $type): AttributeAnalysis
     {
         $analysis = new AttributeAnalysis($type);
+        $analysis->isFile = $this->isFileProperty($property);
 
         foreach ($property->getAttributes() as $attribute) {
             $this->dispatch($attribute, $analysis);
@@ -100,11 +101,11 @@ class SchemaAttributeApplier
             // --- Digits (numeric strings) ------------------------------------
             $name === V\Digits::class => $this->applyDigits($a, $args[0] ?? null),
             $name === V\DigitsBetween::class => $this->applyDigitsBetween($a, $args[0] ?? null, $args[1] ?? null),
-            $name === V\MinDigits::class => $this->applyMin($a, $args[0] ?? null),
-            $name === V\MaxDigits::class => $this->applyMax($a, $args[0] ?? null),
+            $name === V\MinDigits::class => $this->applyMinDigits($a, $args[0] ?? null),
+            $name === V\MaxDigits::class => $this->applyMaxDigits($a, $args[0] ?? null),
 
             // --- Patterns ---------------------------------------------------
-            $name === V\Regex::class => $this->applyPattern($a, $this->trimDelimiters($args[0] ?? null)),
+            $name === V\Regex::class => $this->applyRegex($a, $args[0] ?? null),
             $name === V\NotRegex::class => $a->addNote('Must not match pattern '.$this->stringify($args[0] ?? null)),
             $name === V\Alpha::class => $this->applyPattern($a, '^[A-Za-z]+$'),
             $name === V\AlphaDash::class => $this->applyPattern($a, '^[A-Za-z0-9_-]+$'),
@@ -174,6 +175,8 @@ class SchemaAttributeApplier
             $name === V\CurrentPassword::class => $a->addNote('Must match the authenticated user\'s current password.'),
             $name === V\Exists::class => $a->addNote('Must exist in `'.$this->stringify($args[0] ?? '').'`.'),
             $name === V\Unique::class => $a->addNote('Must be unique in `'.$this->stringify($args[0] ?? '').'`.'),
+            // Not uniqueItems: on a non-wildcard property Laravel's `distinct`
+            // doesn't enforce unique items, and it compares loosely.
             $name === V\Distinct::class => $a->addNote('All array items must be distinct.'),
 
             // --- Dates ------------------------------------------------------
@@ -200,14 +203,38 @@ class SchemaAttributeApplier
     }
 
     /**
+     * PHP date formats that correspond to an OpenAPI/JSON Schema format.
+     */
+    private const DATE_FORMATS = [
+        'Y-m-d' => 'date',
+        'Y-m-d\\TH:i:sP' => 'date-time',
+        'Y-m-d\\TH:i:sp' => 'date-time',
+        'Y-m-d\\TH:i:s.vP' => 'date-time',
+        'Y-m-d\\TH:i:s.uP' => 'date-time',
+        'c' => 'date-time',
+        // No 'H:i:s' => 'time': RFC 3339 `time` requires a UTC offset.
+    ];
+
+    /**
      * @param  array<int, mixed>  $args
      */
     protected function applyDateFormat(AttributeAnalysis $a, array $args): void
     {
-        $values = Arr::flatten($args);
-        if (count($values) === 1 && is_string($values[0])) {
-            $a->type->format($values[0]);
+        $formats = array_values(array_filter(Arr::flatten($args), 'is_string'));
+        if ($formats === []) {
+            return;
         }
+
+        if (count($formats) === 1 && isset(self::DATE_FORMATS[$formats[0]])) {
+            $a->type->format(self::DATE_FORMATS[$formats[0]]);
+
+            return;
+        }
+
+        // A format the base type carries (Scramble documents Carbon as
+        // date-time) would contradict the rule.
+        $a->type->format('');
+        $a->addNote('Date format: '.implode(' or ', array_map(fn ($f) => "`$f`", $formats)).' (PHP date format).');
     }
 
     protected function applyMin(AttributeAnalysis $a, mixed $value): void
@@ -219,7 +246,11 @@ class SchemaAttributeApplier
         $value = $value + 0;
         $type = $a->type;
 
-        if ($type instanceof OpenApiStringType) {
+        if ($a->isFile) {
+            $a->addNote("Minimum file size: {$value} kilobytes.");
+        } elseif ($type instanceof OpenApiArrayType) {
+            $type->setMin((int) $value);
+        } elseif ($type instanceof OpenApiStringType) {
             $type->setMin((int) $value);
         } elseif ($type instanceof OpenApiNumberType) {
             $type->setMin($value);
@@ -235,7 +266,11 @@ class SchemaAttributeApplier
         $value = $value + 0;
         $type = $a->type;
 
-        if ($type instanceof OpenApiStringType) {
+        if ($a->isFile) {
+            $a->addNote("Maximum file size: {$value} kilobytes.");
+        } elseif ($type instanceof OpenApiArrayType) {
+            $type->setMax((int) $value);
+        } elseif ($type instanceof OpenApiStringType) {
             $type->setMax((int) $value);
         } elseif ($type instanceof OpenApiNumberType) {
             $type->setMax($value);
@@ -314,15 +349,13 @@ class SchemaAttributeApplier
             return;
         }
 
-        $count = (int) $count;
-        if ($a->type instanceof OpenApiStringType) {
-            $a->type->setMin($count);
-            $a->type->setMax($count);
-        }
-
-        $this->applyPattern($a, '^\\d{'.$count.'}$');
+        $this->applyDigitsBetween($a, $count, $count);
     }
 
+    /**
+     * On an integer, a digit count bounds the value (3 digits: 100-999); on
+     * a string, it bounds the length and the characters.
+     */
     protected function applyDigitsBetween(AttributeAnalysis $a, mixed $min, mixed $max): void
     {
         if (! is_numeric($min) || ! is_numeric($max)) {
@@ -332,12 +365,85 @@ class SchemaAttributeApplier
         $min = (int) $min;
         $max = (int) $max;
 
+        if ($this->isInteger($a->type)) {
+            $a->type->setMin($this->smallestWithDigits($min));
+            $a->type->setMax($this->largestWithDigits($max));
+
+            return;
+        }
+
         if ($a->type instanceof OpenApiStringType) {
             $a->type->setMin($min);
             $a->type->setMax($max);
         }
 
-        $this->applyPattern($a, '^\\d{'.$min.','.$max.'}$');
+        $this->applyPattern($a, $min === $max ? '^\\d{'.$min.'}$' : '^\\d{'.$min.','.$max.'}$');
+    }
+
+    protected function applyMinDigits(AttributeAnalysis $a, mixed $count): void
+    {
+        if (! is_numeric($count)) {
+            return;
+        }
+
+        if ($this->isInteger($a->type)) {
+            $a->type->setMin($this->smallestWithDigits((int) $count));
+        } elseif ($a->type instanceof OpenApiStringType) {
+            $a->type->setMin((int) $count);
+        }
+    }
+
+    protected function applyMaxDigits(AttributeAnalysis $a, mixed $count): void
+    {
+        if (! is_numeric($count)) {
+            return;
+        }
+
+        if ($this->isInteger($a->type)) {
+            $a->type->setMax($this->largestWithDigits((int) $count));
+        } elseif ($a->type instanceof OpenApiStringType) {
+            $a->type->setMax((int) $count);
+        }
+    }
+
+    /**
+     * An int property stays `type: integer` after #[GreaterThan]/#[MultipleOf]
+     * upgrade it to ConstrainedNumberType, which is not an IntegerType.
+     */
+    protected function isInteger(OpenApiType $type): bool
+    {
+        return $type instanceof OpenApiIntegerType
+            || ($type instanceof OpenApiNumberType && $type->type === 'integer');
+    }
+
+    protected function smallestWithDigits(int $digits): int
+    {
+        return $digits <= 1 ? 0 : 10 ** ($digits - 1);
+    }
+
+    protected function largestWithDigits(int $digits): int
+    {
+        return 10 ** max($digits, 1) - 1;
+    }
+
+    protected function isFileProperty(ReflectionProperty $property): bool
+    {
+        $type = $property->getType();
+        $types = $type instanceof \ReflectionUnionType ? $type->getTypes() : ($type ? [$type] : []);
+
+        foreach ($types as $t) {
+            if ($t instanceof \ReflectionNamedType && is_a($t->getName(), \SplFileInfo::class, true)) {
+                return true;
+            }
+        }
+
+        foreach ([V\File::class, V\Image::class, V\Mimes::class, V\MimeTypes::class, V\Dimensions::class] as $fileRule) {
+            if ($property->getAttributes($fileRule) !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -435,17 +541,39 @@ class SchemaAttributeApplier
         $a->type = $newType;
     }
 
-    protected function trimDelimiters(mixed $pattern): ?string
+    /**
+     * A PCRE pattern becomes a JSON Schema `pattern` when it can be carried
+     * over as is: delimiters are dropped, but modifiers (`/i`, `/u`, ...)
+     * can't be expressed there, so a pattern with modifiers is described in
+     * a note instead of being documented with a different meaning.
+     */
+    protected function applyRegex(AttributeAnalysis $a, mixed $regex): void
     {
-        if (! is_string($pattern)) {
-            return null;
+        if (! is_string($regex) || $regex === '') {
+            return;
         }
 
-        if (preg_match('/^(.)(.*)\1[a-zA-Z]*$/s', $pattern, $m)) {
-            return $m[2];
+        $closing = ['{' => '}', '(' => ')', '[' => ']', '<' => '>'];
+        $open = $regex[0];
+        $close = $closing[$open] ?? $open;
+        $end = strrpos($regex, $close);
+
+        if (ctype_alnum($open) || $open === '\\' || $end === false || $end === 0) {
+            $this->applyPattern($a, $regex);
+
+            return;
         }
 
-        return $pattern;
+        $pattern = substr($regex, 1, $end - 1);
+        $modifiers = substr($regex, $end + 1);
+
+        if ($modifiers !== '') {
+            $a->addNote("Must match pattern `{$regex}`.");
+
+            return;
+        }
+
+        $this->applyPattern($a, $pattern);
     }
 
     /**
@@ -508,7 +636,7 @@ class SchemaAttributeApplier
 
     protected function coerceScalar(OpenApiType $type, string $raw): mixed
     {
-        if ($type instanceof OpenApiIntegerType && is_numeric($raw)) {
+        if ($this->isInteger($type) && is_numeric($raw)) {
             return (int) $raw;
         }
         if ($type instanceof OpenApiNumberType && is_numeric($raw)) {

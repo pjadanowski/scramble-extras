@@ -91,4 +91,64 @@ class ValidationFixtures
     public string $explicitlyNullable;
 
     public string $plain;
+
+    #[V\MinDigits(3)]
+    public int $minDigitsInt;
+
+    #[V\MaxDigits(4)]
+    public int $maxDigitsInt;
+
+    #[V\Digits(4)]
+    public int $digitsInt;
+
+    #[V\DigitsBetween(2, 4)]
+    public int $digitsBetweenInt;
+
+    #[V\Min(1)]
+    public array $minItems;
+
+    #[V\Max(5)]
+    public array $maxItems;
+
+    #[V\Size(2)]
+    public array $sizeItems;
+
+    #[V\Distinct]
+    public array $distinctItems;
+
+    #[V\Max(2048)]
+    public \Illuminate\Http\UploadedFile $upload;
+
+    #[V\File, V\Max(1024)]
+    public string $fileByAttribute;
+
+    #[V\Regex('/^[a-z]+$/i')]
+    public string $caseInsensitiveRegex;
+
+    #[V\Regex('{^\d+$}')]
+    public string $braceDelimitedRegex;
+
+    #[V\DateFormat('Y-m-d')]
+    public string $isoDate;
+
+    #[V\DateFormat('Y-m-d\TH:i:sP')]
+    public string $isoDateTime;
+
+    #[V\DateFormat('d/m/Y')]
+    public string $customDate;
+
+    /**
+     * @example 5
+     */
+    #[V\GreaterThan(0)]
+    public int $positiveWithExample;
+
+    #[V\DateFormat('d.m.Y')]
+    public string $customDateOnDateTime;
+
+    #[V\DateFormat('H:i:s')]
+    public string $timeWithoutOffset;
+
+    #[V\MultipleOf(5), V\Digits(3)]
+    public int $multipleOfThenDigits;
 }

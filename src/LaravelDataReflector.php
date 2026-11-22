@@ -5,6 +5,7 @@ namespace PawelJadanowski\ScrambleExtras;
 use Dedoc\Scramble\Infer\Services\FileNameResolver;
 use Dedoc\Scramble\PhpDoc\PhpDocTypeHelper;
 use Dedoc\Scramble\Support\Generator\Components;
+use Dedoc\Scramble\Support\Generator\Reference;
 use Dedoc\Scramble\Support\Generator\Types\ArrayType as OpenApiArrayType;
 use Dedoc\Scramble\Support\Generator\Types\BooleanType as OpenApiBooleanType;
 use Dedoc\Scramble\Support\Generator\Types\IntegerType as OpenApiIntegerType;
@@ -16,6 +17,8 @@ use Dedoc\Scramble\Support\Generator\Types\UnknownType as OpenApiUnknownType;
 use Dedoc\Scramble\Support\Generator\TypeTransformer;
 use Dedoc\Scramble\Support\PhpDoc;
 use Dedoc\Scramble\Support\Type\ObjectType as ScrambleObjectType;
+use PHPStan\PhpDocParser\Ast\PhpDoc\PhpDocTextNode;
+use PHPStan\PhpDocParser\Ast\Type\TypeNode;
 use ReflectionClass;
 use ReflectionNamedType;
 use ReflectionProperty;
@@ -24,6 +27,7 @@ use Spatie\LaravelData\Attributes\Computed;
 use Spatie\LaravelData\Attributes\DataCollectionOf;
 use Spatie\LaravelData\Attributes\Hidden;
 use Spatie\LaravelData\Optional;
+use Spatie\LaravelData\Support\DataConfig;
 use Spatie\LaravelData\Lazy;
 
 /**
@@ -34,6 +38,45 @@ use Spatie\LaravelData\Lazy;
  */
 class LaravelDataReflector
 {
+    /**
+     * Classes handed to the transformer while building the current schema;
+     * the cache dependencies of that schema.
+     *
+     * @var array<int, string>
+     */
+    protected array $referencedClasses = [];
+
+    /**
+     * Data classes whose input (request body) schema is being built, outermost
+     * first. While it isn't empty, nested Data are inlined with their own
+     * input projection instead of referencing their output component.
+     *
+     * @var array<int, string>
+     */
+    protected static array $inputStack = [];
+
+    /**
+     * Attribute put on object types met while building an input schema. It
+     * marks them for inlining as input, and makes Scramble's TypeTransformer
+     * skip its cache for them.
+     */
+    public const INPUT_ATTRIBUTE = 'scramble-extras:input';
+
+    /**
+     * Whether a nested Data type should be inlined with its input projection:
+     * an input schema is being built, the type was met by that build (tagged
+     * with INPUT_ATTRIBUTE - an untagged type may be another component being
+     * built along the way, which must stay output), and the class isn't
+     * already being built further up (a self-referencing Data would recurse
+     * forever; it falls back to its output component).
+     */
+    public static function shouldInlineAsInput(\Dedoc\Scramble\Support\Type\ObjectType $type): bool
+    {
+        return self::$inputStack !== []
+            && $type->getAttribute(self::INPUT_ATTRIBUTE) === true
+            && ! in_array($type->name, self::$inputStack, true);
+    }
+
     public function __construct(
         protected TypeTransformer $openApiTransformer,
         protected Components $components,
@@ -41,51 +84,81 @@ class LaravelDataReflector
 
     public function buildSchema(string $dataClass, bool $input = false): OpenApiObjectType
     {
-        $cache = $this->cache();
+        // Only output schemas are cached. They end up as reusable components,
+        // which Scramble serializes as-is. Input schemas are inlined into the
+        // request body, where Scramble re-assembles the object from its
+        // `properties` - which a cached, array-backed schema doesn't have.
+        // They are cheap to rebuild anyway.
+        if ($input) {
+            self::$inputStack[] = $dataClass;
 
-        if ($cache !== null) {
-            $key = $dataClass.($input ? '.in' : '.out');
-            $entry = $cache->get($key);
-            $mtime = $this->mtimeOf($dataClass);
-
-            if ($entry !== null && ($entry['mtime'] ?? 0) >= $mtime) {
-                $this->materializeDeps($entry['deps'] ?? []);
-
-                return new CachedSchemaType($entry['array']);
+            try {
+                return $this->doBuildSchema($dataClass, true);
+            } finally {
+                array_pop(self::$inputStack);
             }
-
-            $schema = $this->doBuildSchema($dataClass, $input);
-
-            $cache->put($key, [
-                'mtime' => $mtime,
-                'deps' => $this->extractDeps($schema->toArray()),
-                'array' => $schema->toArray(),
-            ]);
-
-            return $schema;
         }
 
-        return $this->doBuildSchema($dataClass, $input);
+        // An output component can be built from inside an input schema (a
+        // self-referencing Data falls back to its component): its own nested
+        // Data must reference output components, so suspend input mode.
+        $suspendedInputStack = self::$inputStack;
+        self::$inputStack = [];
+
+        try {
+            return $this->buildOutputSchema($dataClass);
+        } finally {
+            self::$inputStack = $suspendedInputStack;
+        }
+    }
+
+    protected function buildOutputSchema(string $dataClass): OpenApiObjectType
+    {
+        $cache = $this->cache();
+
+        if ($cache === null) {
+            return $this->doBuildSchema($dataClass, false);
+        }
+
+        $key = $dataClass.'.out';
+        $fingerprint = $this->fingerprint($dataClass);
+        $entry = $cache->get($key);
+
+        if (
+            $entry !== null
+            && ($entry['fingerprint'] ?? null) === $fingerprint
+            && $this->depsStillResolve($entry['deps'] ?? [])
+        ) {
+            return new CachedSchemaType($entry['array']);
+        }
+
+        $schema = $this->doBuildSchema($dataClass, false);
+
+        $cache->put($key, [
+            'fingerprint' => $fingerprint,
+            'deps' => $this->extractDeps(),
+            'array' => $schema->toArray(),
+        ]);
+
+        return $schema;
     }
 
     protected function doBuildSchema(string $dataClass, bool $input): OpenApiObjectType
     {
+        $this->referencedClasses = [];
+
         $reflection = new ReflectionClass($dataClass);
         $object = new OpenApiObjectType;
         $required = [];
 
-        $classMapper = $this->detectClassNameMapper($reflection);
-
-        $nameResolver = $reflection->getFileName()
-            ? FileNameResolver::createForFile($reflection->getFileName())
-            : null;
+        $mappedNames = $this->mappedNames($dataClass, $input);
 
         foreach ($reflection->getProperties(ReflectionProperty::IS_PUBLIC) as $property) {
             if ($property->isStatic()) {
                 continue;
             }
 
-            $info = $this->describeProperty($property, $input, $classMapper, $nameResolver);
+            $info = $this->describeProperty($property, $input, $mappedNames[$property->getName()] ?? $property->getName());
             if ($info === null) {
                 continue;
             }
@@ -104,85 +177,198 @@ class LaravelDataReflector
 
     protected function cache(): ?SchemaCache
     {
-        if (! function_exists('app')) {
-            return null;
-        }
-
         if (! app()->bound(SchemaCache::class)) {
             return null;
         }
 
-        $config = app()->bound('config') ? app('config') : null;
-        if ($config !== null && ! $config->get('scramble-extras.cache.enabled', true)) {
+        if (! config('scramble-extras.cache.enabled', true)) {
             return null;
         }
 
         return app(SchemaCache::class);
     }
 
-    protected function mtimeOf(string $class): int
+    /**
+     * Identifies the exact source a schema was built from: the Data class's
+     * own file, its parent classes and traits (inherited properties), and
+     * every class named in a class/property attribute (`#[Enum(X::class)]`
+     * inlines enum values, `#[MapName(SomeMapper::class)]` decides names).
+     * Any of those files changing - in either direction, so a deploy that
+     * restores an older mtime counts too - invalidates the entry, as does a
+     * change of config('data.name_mapping_strategy').
+     */
+    protected function fingerprint(string $class): string
     {
+        $files = [];
+
         try {
-            $file = (new ReflectionClass($class))->getFileName();
+            $reflection = new ReflectionClass($class);
         } catch (\ReflectionException) {
-            return 0;
+            return '';
         }
 
-        if ($file === false || ! is_file($file)) {
-            return 0;
+        $related = [];
+        for ($r = $reflection; $r !== false; $r = $r->getParentClass()) {
+            $related[] = $r;
+            foreach ($this->traitsOf($r) as $trait) {
+                $related[] = $trait;
+            }
         }
 
-        return (int) filemtime($file);
+        $attributes = $reflection->getAttributes();
+        foreach ($reflection->getProperties(ReflectionProperty::IS_PUBLIC) as $property) {
+            array_push($attributes, ...$property->getAttributes());
+        }
+        foreach ($attributes as $attribute) {
+            foreach (\Illuminate\Support\Arr::flatten($attribute->getArguments()) as $argument) {
+                if (is_string($argument) && (class_exists($argument) || enum_exists($argument))) {
+                    $related[] = new ReflectionClass($argument);
+                }
+            }
+        }
+
+        foreach ($related as $r) {
+            $file = $r->getFileName();
+            if ($file !== false && is_file($file)) {
+                $files[$file] = filemtime($file);
+            }
+        }
+
+        ksort($files);
+
+        return md5(serialize([$files, config('data.name_mapping_strategy')]));
     }
 
     /**
-     * @param  array<int, string>  $deps
+     * @return array<int, ReflectionClass<object>>
      */
-    protected function materializeDeps(array $deps): void
+    protected function traitsOf(ReflectionClass $class): array
     {
-        foreach ($deps as $dep) {
-            if (! is_string($dep)) {
-                continue;
-            }
-            if (! class_exists($dep) && ! enum_exists($dep)) {
-                continue;
-            }
-            $this->openApiTransformer->transform(new ScrambleObjectType($dep));
+        $traits = [];
+        foreach ($class->getTraits() as $trait) {
+            $traits[] = $trait;
+            array_push($traits, ...$this->traitsOf($trait));
         }
+
+        return $traits;
     }
 
     /**
-     * @param  array<string, mixed>  $schemaArray
-     * @return array<int, string>
+     * A cached schema holds `$ref` names resolved in an earlier run. Scramble
+     * picks component names in registration order (a short class name goes
+     * to whichever class claims it first, others get their FQCN), so the same
+     * class can get a different name in this run. Re-register every
+     * dependency and only serve the entry when each still has the name the
+     * cached `$ref` points to.
+     *
+     * @param  array<string, string>  $deps  component name => class
      */
-    protected function extractDeps(array $schemaArray): array
+    protected function depsStillResolve(array $deps): bool
+    {
+        foreach ($deps as $name => $class) {
+            if (! is_string($class) || (! class_exists($class) && ! enum_exists($class))) {
+                return false;
+            }
+
+            $reference = $this->openApiTransformer->transform(new ScrambleObjectType($class));
+
+            if (! $reference instanceof Reference || $reference->getUniqueName() !== $name) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Maps every class handed to the transformer while building the schema
+     * to the component name it is registered under in this run.
+     *
+     * @return array<string, string> component name => class
+     */
+    protected function extractDeps(): array
     {
         $deps = [];
-        $this->walkRefs($schemaArray, $deps);
 
-        return array_values(array_unique($deps));
+        foreach (array_unique($this->referencedClasses) as $class) {
+            $reference = $this->openApiTransformer->transform(new ScrambleObjectType($class));
+
+            if ($reference instanceof Reference && $reference->referenceType === 'schemas') {
+                $deps[$reference->getUniqueName()] = $class;
+            }
+        }
+
+        return $deps;
     }
 
     /**
-     * @param  array<int, string>  $deps
+     * Scramble's TypeTransformer caches results by type name, so the input
+     * schema of a nested Data and its output reference would be served for
+     * each other. While building an input schema, every object type is
+     * tagged with an attribute, which makes the transformer skip its cache.
      */
-    protected function walkRefs(mixed $node, array &$deps): void
+    protected function bypassTransformCacheForInput(\Dedoc\Scramble\Support\Type\Type $type): \Dedoc\Scramble\Support\Type\Type
     {
-        if (! is_array($node)) {
+        if (self::$inputStack === []) {
+            return $type;
+        }
+
+        if ($type instanceof ScrambleObjectType) {
+            $type->setAttribute(self::INPUT_ATTRIBUTE, true);
+
+            if ($type instanceof \Dedoc\Scramble\Support\Type\Generic) {
+                array_map($this->bypassTransformCacheForInput(...), $type->templateTypes);
+            }
+        } elseif ($type instanceof \Dedoc\Scramble\Support\Type\ArrayType) {
+            $this->bypassTransformCacheForInput($type->value);
+        } elseif ($type instanceof \Dedoc\Scramble\Support\Type\Union) {
+            array_map($this->bypassTransformCacheForInput(...), $type->types);
+        } elseif ($type instanceof \Dedoc\Scramble\Support\Type\KeyedArrayType) {
+            foreach ($type->items as $item) {
+                $this->bypassTransformCacheForInput($item->value);
+            }
+        }
+
+        return $type;
+    }
+
+    /**
+     * Records the classes inside a PHPDoc type (`array<int, FooData>`,
+     * `Collection<int, StatusEnum>`, ...) as cache dependencies.
+     */
+    protected function collectClasses(\Dedoc\Scramble\Support\Type\Type $type): void
+    {
+        if ($type instanceof ScrambleObjectType) {
+            if (class_exists($type->name) || enum_exists($type->name)) {
+                $this->referencedClasses[] = $type->name;
+            }
+
+            if ($type instanceof \Dedoc\Scramble\Support\Type\Generic) {
+                foreach ($type->templateTypes as $t) {
+                    $this->collectClasses($t);
+                }
+            }
+
             return;
         }
-        foreach ($node as $k => $v) {
-            if ($k === '$ref' && is_string($v)) {
-                if (preg_match('~^#/components/schemas/(.+)$~', $v, $m)) {
-                    $fqcn = DataClassNameRegistry::resolve($m[1]);
-                    if ($fqcn !== null) {
-                        $deps[] = $fqcn;
-                    }
-                }
-                continue;
+
+        if ($type instanceof \Dedoc\Scramble\Support\Type\ArrayType) {
+            $this->collectClasses($type->value);
+
+            return;
+        }
+
+        if ($type instanceof \Dedoc\Scramble\Support\Type\Union) {
+            foreach ($type->types as $t) {
+                $this->collectClasses($t);
             }
-            if (is_array($v)) {
-                $this->walkRefs($v, $deps);
+
+            return;
+        }
+
+        if ($type instanceof \Dedoc\Scramble\Support\Type\KeyedArrayType) {
+            foreach ($type->items as $item) {
+                $this->collectClasses($item->value);
             }
         }
     }
@@ -190,7 +376,7 @@ class LaravelDataReflector
     /**
      * @return array{name: string, type: OpenApiType, required: bool}|null
      */
-    protected function describeProperty(ReflectionProperty $property, bool $input, ?\Closure $classMapper, ?FileNameResolver $nameResolver): ?array
+    protected function describeProperty(ReflectionProperty $property, bool $input, string $name): ?array
     {
         $isHidden = $this->hasAttribute($property, Hidden::class);
         $isComputed = $this->hasAttribute($property, Computed::class);
@@ -217,12 +403,12 @@ class LaravelDataReflector
                 continue;
             }
 
-            $name = $t->getName();
-            if (is_subclass_of($name, Optional::class) || $name === Optional::class) {
+            $typeName = $t->getName();
+            if (is_a($typeName, Optional::class, true)) {
                 $isOptional = true;
                 continue;
             }
-            if (is_subclass_of($name, Lazy::class) || $name === Lazy::class) {
+            if (is_a($typeName, Lazy::class, true)) {
                 $isLazy = true;
                 continue;
             }
@@ -237,8 +423,7 @@ class LaravelDataReflector
                 $this->resolveClassType($collectionOf),
             );
         } else {
-            $docVarType = $this->extractDocVarType($property);
-            $openApiType = $this->resolveType($effectiveTypes, $docVarType, $nameResolver);
+            $openApiType = $this->resolveType($effectiveTypes, $this->extractDocType($property));
         }
 
         if ($isNullable) {
@@ -258,16 +443,15 @@ class LaravelDataReflector
             $openApiType->setDescription($description);
         }
 
-        $name = $this->resolveMappedName($property, $input, $classMapper);
-
-        if (! $input && $isComputed) {
-            // Computed properties are produced server-side on every output, so always required.
-            $required = true;
+        if (! $input) {
+            // laravel-data writes every property except Optional and Lazy ones
+            // (null for a nullable one, the default for a defaulted one).
+            // Validation attributes like #[Sometimes] only affect input.
+            $required = ! $isOptional && ! $isLazy;
         } elseif ($analysis->forceRequired !== null) {
             $required = $analysis->forceRequired;
         } else {
             $required = ! $isOptional
-                && ! $isLazy
                 && ! $isNullable
                 && ! $this->promotedHasDefault($property);
         }
@@ -336,10 +520,10 @@ class LaravelDataReflector
     /**
      * @param  ReflectionNamedType[]  $types
      */
-    protected function resolveType(array $types, ?string $docVarType, ?FileNameResolver $nameResolver): OpenApiType
+    protected function resolveType(array $types, ?TypeNode $docType): OpenApiType
     {
-        if ($docVarType !== null) {
-            $resolved = $this->resolveDocType($docVarType, $nameResolver);
+        if ($docType !== null) {
+            $resolved = $this->resolveDocType($docType);
             if (! $resolved instanceof OpenApiUnknownType) {
                 return $resolved;
             }
@@ -349,13 +533,16 @@ class LaravelDataReflector
             return new OpenApiUnknownType;
         }
 
-        $primary = $types[0];
-        $name = $primary->getName();
+        if (count($types) > 1) {
+            return $this->resolveUnionType($types);
+        }
+
+        $name = $types[0]->getName();
 
         return match ($name) {
             'int' => new OpenApiIntegerType,
             'string' => new OpenApiStringType,
-            'bool' => new OpenApiBooleanType,
+            'bool', 'true', 'false' => new OpenApiBooleanType,
             'float' => new OpenApiNumberType,
             'array' => new OpenApiArrayType,
             'mixed' => new OpenApiUnknownType,
@@ -363,19 +550,55 @@ class LaravelDataReflector
         };
     }
 
-    protected function resolveDocType(string $docType, ?FileNameResolver $nameResolver): OpenApiType
+    /**
+     * A native union (`int|string`, `int|FooData|null`) documents every
+     * member, null included.
+     *
+     * @param  ReflectionNamedType[]  $types
+     */
+    protected function resolveUnionType(array $types): OpenApiType
     {
-        $phpDocNode = PhpDoc::parse("/** @var $docType */", $nameResolver);
+        $members = [];
 
-        $varTags = $phpDocNode->getVarTagValues();
-        if (empty($varTags)) {
+        foreach ($types as $type) {
+            $member = match ($type->getName()) {
+                'int' => new \Dedoc\Scramble\Support\Type\IntegerType,
+                'string' => new \Dedoc\Scramble\Support\Type\StringType,
+                'bool', 'true', 'false' => new \Dedoc\Scramble\Support\Type\BooleanType,
+                'float' => new \Dedoc\Scramble\Support\Type\FloatType,
+                'array' => new \Dedoc\Scramble\Support\Type\ArrayType,
+                // Kept as a member: Scramble's anyOf ignores nullable().
+                'null' => new \Dedoc\Scramble\Support\Type\NullType,
+                'mixed' => null,
+                default => class_exists($type->getName()) || enum_exists($type->getName())
+                    ? new ScrambleObjectType($type->getName())
+                    : null,
+            };
+
+            if ($member instanceof ScrambleObjectType) {
+                $this->referencedClasses[] = $member->name;
+            }
+
+            if ($member !== null) {
+                $members[] = $member;
+            }
+        }
+
+        if ($members === []) {
             return new OpenApiUnknownType;
         }
 
-        $scrambleType = PhpDocTypeHelper::toType($varTags[0]->type);
-        $this->registerClassesIn($scrambleType);
+        $union = count($members) === 1 ? $members[0] : new \Dedoc\Scramble\Support\Type\Union($members);
 
-        return $this->openApiTransformer->transform($scrambleType);
+        return $this->openApiTransformer->transform($this->bypassTransformCacheForInput($union));
+    }
+
+    protected function resolveDocType(TypeNode $docType): OpenApiType
+    {
+        $scrambleType = PhpDocTypeHelper::toType($docType);
+        $this->collectClasses($scrambleType);
+
+        return $this->openApiTransformer->transform($this->bypassTransformCacheForInput($scrambleType));
     }
 
     protected function resolveClassType(string $className): OpenApiType
@@ -384,81 +607,49 @@ class LaravelDataReflector
             return new OpenApiUnknownType;
         }
 
-        DataClassNameRegistry::register($className);
+        $this->referencedClasses[] = $className;
 
-        return $this->openApiTransformer->transform(new ScrambleObjectType($className));
+        return $this->openApiTransformer->transform(
+            $this->bypassTransformCacheForInput(new ScrambleObjectType($className)),
+        );
     }
 
-    protected function registerClassesIn(\Dedoc\Scramble\Support\Type\Type $type): void
+    /**
+     * The property's PHPDoc type: its own `@var`, or for a promoted property
+     * the constructor's `@param`. Parsed with a real PHPDoc parser (generics
+     * with spaces, multi-line array shapes), with class names resolved
+     * against the file of the class that declares the property.
+     */
+    protected function extractDocType(ReflectionProperty $property): ?TypeNode
     {
-        if ($type instanceof ScrambleObjectType) {
-            if (class_exists($type->name) || enum_exists($type->name)) {
-                DataClassNameRegistry::register($type->name);
-            }
+        $declaringClass = $property->getDeclaringClass();
+        $nameResolver = $this->nameResolverFor($declaringClass);
 
-            if ($type instanceof \Dedoc\Scramble\Support\Type\Generic) {
-                foreach ($type->templateTypes as $t) {
-                    $this->registerClassesIn($t);
-                }
-            }
-
-            return;
-        }
-        if ($type instanceof \Dedoc\Scramble\Support\Type\ArrayType) {
-            $this->registerClassesIn($type->value);
-
-            return;
-        }
-        if ($type instanceof \Dedoc\Scramble\Support\Type\Union) {
-            foreach ($type->types as $t) {
-                $this->registerClassesIn($t);
-            }
-
-            return;
-        }
-        if ($type instanceof \Dedoc\Scramble\Support\Type\KeyedArrayType) {
-            foreach ($type->items as $item) {
-                $this->registerClassesIn($item->value);
+        if ($doc = $property->getDocComment()) {
+            $varTags = PhpDoc::parse($doc, $nameResolver)->getVarTagValues();
+            if ($varTags !== []) {
+                return $varTags[0]->type;
             }
         }
-    }
 
-    protected function extractDocVarType(ReflectionProperty $property): ?string
-    {
-        $doc = $property->getDocComment() ?: '';
-
-        if ($doc !== '' && preg_match('/@var\s+([^\n*]+)/', $doc, $m)) {
-            return trim($m[1]);
+        if (! $property->isPromoted() || ! ($constructorDoc = $declaringClass->getConstructor()?->getDocComment())) {
+            return null;
         }
 
-        if ($property->isPromoted()) {
-            $paramType = $this->findPromotedParamType($property);
-            if ($paramType !== null) {
-                return $paramType;
+        foreach (PhpDoc::parse($constructorDoc, $nameResolver)->getParamTagValues() as $paramTag) {
+            if ($paramTag->parameterName === '$'.$property->getName()) {
+                return $paramTag->type;
             }
         }
 
         return null;
     }
 
-    protected function findPromotedParamType(ReflectionProperty $property): ?string
+    protected function nameResolverFor(ReflectionClass $class): ?FileNameResolver
     {
-        $constructor = $property->getDeclaringClass()->getConstructor();
-        if (! $constructor) {
-            return null;
-        }
+        $file = $class->getFileName();
 
-        $constructorDoc = $constructor->getDocComment() ?: '';
-        if ($constructorDoc === '') {
-            return null;
-        }
-
-        $name = $property->getName();
-        if (preg_match('/@param\s+(\S+)\s+\$'.preg_quote($name, '/').'\b/', $constructorDoc, $m)) {
-            return trim($m[1]);
-        }
-
-        return null;
+        return $file ? FileNameResolver::createForFile($file) : null;
     }
 
     protected function extractDescription(ReflectionProperty $property): string
@@ -468,72 +659,36 @@ class LaravelDataReflector
             return '';
         }
 
-        $lines = preg_split('/\r?\n/', $doc) ?: [];
-        $description = [];
-        foreach ($lines as $line) {
-            $line = trim($line, " \t/*");
-            if ($line === '' || str_starts_with($line, '@')) {
-                continue;
+        // Only the free text before the tags: a multi-line tag (an array
+        // shape, a long @example) continues on lines that don't start with `@`.
+        $text = [];
+        foreach (PhpDoc::parse($doc)->children as $child) {
+            if (! $child instanceof PhpDocTextNode) {
+                break;
             }
-            $description[] = $line;
+            $text[] = trim((string) $child);
         }
 
-        return trim(implode(' ', $description));
+        return trim(preg_replace('/\s+/', ' ', implode(' ', $text)) ?? '');
     }
 
-    protected function detectClassNameMapper(ReflectionClass $reflection): ?\Closure
+    /**
+     * The names spatie/laravel-data itself reads (input) or writes (output)
+     * for each property, taken from its own metadata so every mapping source
+     * is honoured: MapName(input, output), MapInputName, MapOutputName on the
+     * property or the class, and config('data.name_mapping_strategy').
+     *
+     * @return array<string, string> property name => mapped name
+     */
+    protected function mappedNames(string $dataClass, bool $input): array
     {
-        foreach ($reflection->getAttributes() as $attribute) {
-            if ($attribute->getName() !== \Spatie\LaravelData\Attributes\MapName::class) {
-                continue;
-            }
+        $names = [];
 
-            $args = $attribute->getArguments();
-            $mapper = $args[0] ?? null;
-            if (is_string($mapper) && class_exists($mapper)) {
-                $instance = new $mapper;
-
-                return static fn (string $name) => $instance->map($name);
-            }
+        foreach (app(DataConfig::class)->getDataClass($dataClass)->properties as $property) {
+            $mapped = $input ? $property->inputMappedName : $property->outputMappedName;
+            $names[$property->name] = $mapped ?? $property->name;
         }
 
-        return null;
-    }
-
-    protected function resolveMappedName(ReflectionProperty $property, bool $input, ?\Closure $classMapper): string
-    {
-        $name = $property->getName();
-
-        $perPropertyMapper = $this->getPerPropertyMapper($property, $input);
-        if ($perPropertyMapper !== null) {
-            return $perPropertyMapper($name);
-        }
-
-        return $classMapper ? $classMapper($name) : $name;
-    }
-
-    protected function getPerPropertyMapper(ReflectionProperty $property, bool $input): ?\Closure
-    {
-        $targetAttr = $input
-            ? \Spatie\LaravelData\Attributes\MapInputName::class
-            : \Spatie\LaravelData\Attributes\MapName::class;
-
-        foreach ($property->getAttributes() as $attribute) {
-            if ($attribute->getName() !== $targetAttr) {
-                continue;
-            }
-            $args = $attribute->getArguments();
-            $mapper = $args[0] ?? null;
-            if (is_string($mapper) && class_exists($mapper)) {
-                $instance = new $mapper;
-
-                return static fn (string $n) => $instance->map($n);
-            }
-            if (is_string($mapper)) {
-                return static fn () => $mapper;
-            }
-        }
-
-        return null;
+        return $names;
     }
 }

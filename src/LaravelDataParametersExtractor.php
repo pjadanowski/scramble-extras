@@ -4,6 +4,7 @@ namespace PawelJadanowski\ScrambleExtras;
 
 use Dedoc\Scramble\Support\Generator\Parameter;
 use Dedoc\Scramble\Support\Generator\Schema;
+use Dedoc\Scramble\Support\Generator\Types\ObjectType as OpenApiObjectType;
 use Dedoc\Scramble\Support\Generator\TypeTransformer;
 use Dedoc\Scramble\Support\OperationExtensions\ParameterExtractor\ParameterExtractor;
 use Dedoc\Scramble\Support\OperationExtensions\RulesExtractor\ParametersExtractionResult;
@@ -15,6 +16,11 @@ use Spatie\LaravelData\Contracts\BaseData;
 
 class LaravelDataParametersExtractor implements ParameterExtractor
 {
+    /**
+     * Same list as Scramble's RequestBodyExtension::HTTP_METHODS_WITHOUT_REQUEST_BODY.
+     */
+    private const METHODS_WITHOUT_BODY = ['get', 'delete', 'head'];
+
     public function __construct(
         protected TypeTransformer $openApiTransformer,
     ) {}
@@ -32,10 +38,21 @@ class LaravelDataParametersExtractor implements ParameterExtractor
                 continue;
             }
 
-            $parameterExtractionResults[] = $this->buildResult($dataClass);
+            $parameterExtractionResults[] = $this->buildResult($dataClass, $this->httpMethod($routeInfo));
         }
 
         return $parameterExtractionResults;
+    }
+
+    /**
+     * RouteInfo::$method only exists since Scramble documents one operation
+     * per HTTP method; before that, the operation was the route's first one.
+     */
+    protected function httpMethod(RouteInfo $routeInfo): string
+    {
+        return property_exists($routeInfo, 'method')
+            ? $routeInfo->method
+            : ($routeInfo->route->methods()[0] ?? 'GET');
     }
 
     protected function getDataClassName(ReflectionParameter $parameter): ?string
@@ -59,15 +76,26 @@ class LaravelDataParametersExtractor implements ParameterExtractor
             : null;
     }
 
-    protected function buildResult(string $dataClass): ParametersExtractionResult
+    protected function buildResult(string $dataClass, string $httpMethod): ParametersExtractionResult
     {
         $reflector = new LaravelDataReflector(
             $this->openApiTransformer,
             $this->openApiTransformer->getComponents(),
         );
 
+        $schema = $reflector->buildSchema($dataClass, input: true);
+
+        // Without a request body, laravel-data fills the Data object from the
+        // query string, so each property is its own query parameter.
+        if (in_array(strtolower($httpMethod), self::METHODS_WITHOUT_BODY, true)) {
+            return new ParametersExtractionResult(
+                parameters: $this->queryParameters($schema),
+                schemaName: null,
+            );
+        }
+
         $body = (new Parameter('*', 'body'))
-            ->setSchema(Schema::fromType($reflector->buildSchema($dataClass, input: true)));
+            ->setSchema(Schema::fromType($schema));
 
         // The body schema is inlined (no `schemaName`) on purpose. A Data class
         // is frequently used as both a response and a request body, and its
@@ -82,5 +110,28 @@ class LaravelDataParametersExtractor implements ParameterExtractor
             parameters: [$body],
             schemaName: null,
         );
+    }
+
+    /**
+     * @return Parameter[]
+     */
+    protected function queryParameters(OpenApiObjectType $schema): array
+    {
+        $parameters = [];
+
+        foreach ($schema->properties as $name => $type) {
+            $parameter = (new Parameter($name, 'query'))
+                ->required(in_array($name, $schema->required, true))
+                ->setSchema(Schema::fromType($type));
+
+            if ($type->description !== '') {
+                $parameter->description($type->description);
+                $type->setDescription('');
+            }
+
+            $parameters[] = $parameter;
+        }
+
+        return $parameters;
     }
 }
