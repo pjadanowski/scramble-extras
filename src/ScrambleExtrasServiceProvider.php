@@ -10,15 +10,18 @@ use PawelJadanowski\ScrambleExtras\Console\Commands\ClearSchemaCacheCommand;
 
 /**
  * Boots scramble-extras's integrations into Scramble:
- *  - Registers TypeToSchema/Operation/Infer extensions on Scramble's global
- *    extension list, so they participate in the same pipeline as user-defined
- *    extensions registered via config/scramble.php.
+ *  - Registers TypeToSchema/Infer extensions on Scramble's global extension
+ *    list, so they participate in the same pipeline as user-defined
+ *    extensions registered via config/scramble.php (those lists are read
+ *    lazily, so registering from this provider's boot() is early enough).
  *  - Prepends a Spatie Data parameter extractor so request bodies typed with
  *    Data subclasses produce inlined input schemas (kept separate from the
  *    reusable output components to stay faithful to input-only rules).
- *  - Prepends the 422-for-Data-DTO and route-methods-expansion fixes directly
- *    onto Scramble's OperationTransformers pipeline (registerExtensions()
- *    would land them too late - see LaravelDataValidationExceptionExtension).
+ *  - Adds the operation extensions (422-for-Data-DTO, query-builder
+ *    parameters) directly onto Scramble's OperationTransformers pipeline:
+ *    Scramble snapshots OperationExtension classes from its global list when
+ *    its own provider boots, before this one, so registerExtensions() would
+ *    never reach that pipeline.
  *  - Binds the SchemaCache singleton (file-backed, per-class mtime
  *    invalidation) and registers the cache:clear artisan command.
  */
@@ -51,12 +54,6 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             LaravelDataReturnTypeExtension::class,
         ];
 
-        // Only register the query-builder extension when the (optional) Spatie
-        // package is actually installed.
-        if (class_exists(\Spatie\QueryBuilder\QueryBuilder::class)) {
-            $extensions[] = QueryBuilderOperationExtension::class;
-        }
-
         Scramble::registerExtensions($extensions);
 
         Scramble::configure()->withParametersExtractors(function (ParametersExtractors $extractors) {
@@ -65,6 +62,17 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
 
         Scramble::configure()->withOperationTransformers(function (OperationTransformers $transformers) {
             $transformers->prepend(LaravelDataValidationExceptionExtension::class);
+
+            // Appended directly rather than via registerExtensions(): Scramble
+            // collects OperationExtension classes from Scramble::$extensions
+            // once, while its own provider boots (before this one), so a
+            // registerExtensions() call here would never reach the pipeline.
+            // Only when the (optional) Spatie package is actually installed.
+            // OperationTransformers::all() de-duplicates, so users who also
+            // list it in config('scramble.extensions') don't get it twice.
+            if (class_exists(\Spatie\QueryBuilder\QueryBuilder::class)) {
+                $transformers->append(QueryBuilderOperationExtension::class);
+            }
         });
 
         // resolveOperationMethodsUsing() doesn't exist before dedoc/scramble
