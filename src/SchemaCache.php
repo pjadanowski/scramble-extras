@@ -11,9 +11,9 @@ use Composer\InstalledVersions;
  *
  * Cache shape:
  *   [ "Fully\\Qualified\\Name.out" => [
- *       'mtime' => 1714000000,
- *       'deps'  => ['App\\Data\\JobData', ...],   // FQCNs to materialize on hit
- *       'array' => [...],                          // schema array form
+ *       'fingerprint' => '…',                         // source files + mtimes
+ *       'deps'  => ['JobData' => 'App\\Data\\JobData'], // component name => class
+ *       'array' => [...],                             // schema array form
  *   ], ... ]
  *
  * Writes are deferred: `put()` only mutates the in-memory map and marks the
@@ -21,18 +21,19 @@ use Composer\InstalledVersions;
  * `flush()`). This keeps a full export — which can build hundreds of Data
  * schemas — to a single disk write instead of one rewrite per class.
  *
- * The on-disk payload carries a signature derived from the installed Scramble
- * version and an internal format version, so the cache self-invalidates when
- * either changes (no manual `cache:clear` needed after an upgrade).
+ * The on-disk payload carries a signature derived from the installed versions
+ * of Scramble, spatie/laravel-data and this package, plus an internal format
+ * version, so the cache self-invalidates when any of them changes (no manual
+ * `cache:clear` needed after an upgrade).
  */
 class SchemaCache
 {
     /**
      * Bump when the cached array shape produced by this package changes.
      */
-    private const FORMAT_VERSION = 1;
+    private const FORMAT_VERSION = 2;
 
-    /** @var array<string, array{mtime: int, deps: array<int, string>, array: array<string, mixed>}>|null */
+    /** @var array<string, array{fingerprint: string, deps: array<string, string>, array: array<string, mixed>}>|null */
     private ?array $entries = null;
 
     private bool $dirty = false;
@@ -47,7 +48,7 @@ class SchemaCache
     }
 
     /**
-     * @return array{mtime: int, deps: array<int, string>, array: array<string, mixed>}|null
+     * @return array{fingerprint: string, deps: array<string, string>, array: array<string, mixed>}|null
      */
     public function get(string $key): ?array
     {
@@ -55,7 +56,7 @@ class SchemaCache
     }
 
     /**
-     * @param  array{mtime: int, deps: array<int, string>, array: array<string, mixed>}  $entry
+     * @param  array{fingerprint: string, deps: array<string, string>, array: array<string, mixed>}  $entry
      */
     public function put(string $key, array $entry): void
     {
@@ -101,7 +102,7 @@ class SchemaCache
     }
 
     /**
-     * @return array<string, array{mtime: int, deps: array<int, string>, array: array<string, mixed>}>
+     * @return array<string, array{fingerprint: string, deps: array<string, string>, array: array<string, mixed>}>
      */
     private function load(): array
     {
@@ -137,18 +138,34 @@ class SchemaCache
         $tmp = $this->path.'.'.getmypid().'.tmp';
 
         if (@file_put_contents($tmp, $contents) === false) {
+            @unlink($tmp);
+
             return;
         }
 
-        @rename($tmp, $this->path);
+        if (! @rename($tmp, $this->path)) {
+            @unlink($tmp);
+
+            return;
+        }
+
+        // The file is loaded with `include`: without this, OPcache (notably
+        // with validate_timestamps=0 in production) keeps serving the
+        // previously compiled version of the file.
+        if (function_exists('opcache_invalidate')) {
+            @opcache_invalidate($this->path, true);
+        }
     }
 
     private function signature(): string
     {
-        $scrambleVersion = class_exists(InstalledVersions::class)
-            ? (InstalledVersions::getVersion('dedoc/scramble') ?? 'unknown')
-            : 'unknown';
+        $versions = array_map(
+            fn (string $package) => class_exists(InstalledVersions::class) && InstalledVersions::isInstalled($package)
+                ? (InstalledVersions::getReference($package) ?? InstalledVersions::getVersion($package) ?? 'unknown')
+                : 'unknown',
+            ['dedoc/scramble', 'spatie/laravel-data', 'pjadanowski/scramble-extras'],
+        );
 
-        return self::FORMAT_VERSION.'|'.$scrambleVersion;
+        return self::FORMAT_VERSION.'|'.implode('|', $versions);
     }
 }

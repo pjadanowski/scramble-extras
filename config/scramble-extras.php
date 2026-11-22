@@ -9,8 +9,9 @@ return [
     |
     | scramble-extras caches the schemas it builds from your spatie/laravel-data
     | classes so a full `scramble:export` / docs request doesn't re-reflect and
-    | re-parse every Data class on every run. The cache is invalidated per class
-    | whenever the source file's mtime changes.
+    | re-parse every Data class on every run. An entry is invalidated when the
+    | Data class's file, a parent class, a trait or a class named in one of
+    | its attributes changes.
     |
     | You'll typically want it enabled in production and CI, and may prefer it
     | disabled while actively iterating on Data classes locally.

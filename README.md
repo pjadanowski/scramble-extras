@@ -10,7 +10,7 @@ A free, open Laravel package that adds full **Spatie ecosystem** support to [ded
 - **All ~80 Spatie validation attributes → OpenAPI fields** — `#[Email]` → `format: email`, `#[Min(3)]` → `minLength`, `#[GreaterThan(0)]` → `exclusiveMinimum`, `#[In(...)]` / `#[Enum(SomeEnum::class)]` → `enum`, `#[Regex]` → `pattern`, `#[Image]` → `contentMediaType: image/*`, plus description notes for `#[Same]`, `#[Confirmed]`, `#[Exists]`, `#[RequiredIf]`, etc.
 - **`PaginatedDataCollection<T>`, `CursorPaginatedDataCollection<T>`, `DataCollection<T>`** — proper response envelopes (Laravel paginator format / cursor format / plain array).
 - **Spatie Laravel Query Builder** — `allowedFilters` / `allowedSorts` / `allowedIncludes` / `allowedFields` / `defaultSort` / `jsonPaginate()` parsed via AST. `AllowedFilter::exact($column)` on an enum-cast Eloquent column emits `enum: [...]` automatically.
-- **Persistent schema cache** — file-based, mtime-invalidated. `php artisan scramble-extras:cache:clear` to wipe.
+- **Persistent schema cache** — file-based, invalidated per class when its source (or a parent class, trait or attribute-referenced class) changes. `php artisan scramble-extras:cache:clear` to wipe.
 - **422 for `Data`-typed actions** — a controller action type-hinted with a `Data` class is validated the same way a `FormRequest` would be, so it now documents a `422` response the same way core Scramble already does for `FormRequest`.
 - **`PATCH` documented alongside `PUT`** — Scramble's default route-methods resolver only documents the first HTTP method a route responds to, so `Route::apiResource()`'s update action (registered for both `PUT` and `PATCH`) only ever got a `put` operation. Opt out with `SCRAMBLE_EXTRAS_EXPAND_ROUTE_METHODS=false`. Requires a `dedoc/scramble` version with `GeneratorConfig::resolveOperationMethodsUsing()` (added after this package's 0.13.0 floor); on older installs this feature is a no-op rather than an error.
 
@@ -81,7 +81,7 @@ You don't have to add anything to `config/scramble.php`.
 
 ## Cache
 
-The package transparently caches built schemas in `storage/framework/cache/scramble-extras/schemas.php`. Cache invalidates per-class on `filemtime()` change, so editing a `Data` class auto-rebuilds just that class on the next export. The cache file also carries a signature derived from the installed Scramble version, so it self-invalidates after a `dedoc/scramble` upgrade — no manual clear required.
+The package transparently caches the response (output) schemas it builds from `Data` classes in `storage/framework/cache/scramble-extras/schemas.php`. An entry is rebuilt when the `Data` class's file changes, or the file of a parent class, a trait, or a class named in one of its attributes (e.g. `#[Enum(StatusEnum::class)]`). The cache file also carries a signature derived from the installed versions of Scramble, spatie/laravel-data and this package, so it self-invalidates after an upgrade — no manual clear required. Request body schemas are always built fresh.
 
 Writes are deferred: a full export builds every schema in memory and persists the cache **once** on shutdown, rather than rewriting the file per class.
 

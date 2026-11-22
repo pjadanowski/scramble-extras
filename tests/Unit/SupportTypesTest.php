@@ -5,7 +5,6 @@ namespace PawelJadanowski\ScrambleExtras\Tests\Unit;
 use Dedoc\Scramble\Support\Generator\Types\StringType;
 use PawelJadanowski\ScrambleExtras\CachedSchemaType;
 use PawelJadanowski\ScrambleExtras\ConstrainedNumberType;
-use PawelJadanowski\ScrambleExtras\DataClassNameRegistry;
 use PawelJadanowski\ScrambleExtras\PatternedStringType;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
@@ -80,18 +79,5 @@ class SupportTypesTest extends TestCase
         $type->nullable(true);
 
         $this->assertSame(['object', 'null'], $type->toArray()['type']);
-    }
-
-    #[Test]
-    public function data_class_name_registry_resolves_short_name(): void
-    {
-        DataClassNameRegistry::reset();
-        DataClassNameRegistry::register(StringType::class);
-
-        $this->assertSame(StringType::class, DataClassNameRegistry::resolve('StringType'));
-        $this->assertNull(DataClassNameRegistry::resolve('Nonexistent'));
-
-        DataClassNameRegistry::reset();
-        $this->assertSame([], DataClassNameRegistry::all());
     }
 }

@@ -44,8 +44,6 @@ class LaravelDataTypeToSchemaExtension extends TypeToSchemaExtension
 
     public function reference(ObjectType $type): Reference
     {
-        DataClassNameRegistry::register($type->name);
-
         return ClassBasedReference::create('schemas', $type->name, $this->components);
     }
 
