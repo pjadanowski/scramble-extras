@@ -2,12 +2,25 @@
 
 namespace PawelJadanowski\ScrambleExtras\Tests;
 
+use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\ScrambleServiceProvider;
 use PawelJadanowski\ScrambleExtras\ScrambleExtrasServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 abstract class TestCase extends Orchestra
 {
+    protected function setUp(): void
+    {
+        // Scramble::$extensions is process-wide static state that outlives
+        // the per-test application. Without resetting it, extensions
+        // registered by an earlier test's boot leak into the next one and
+        // can mask boot-order bugs (an extension registered "too late"
+        // would still show up from the previous test's leftovers).
+        Scramble::$extensions = [];
+
+        parent::setUp();
+    }
+
     protected function getPackageProviders($app): array
     {
         return [

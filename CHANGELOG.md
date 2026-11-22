@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Query-builder parameters missing from the spec.** `filter[...]`, `sort`,
+  `include` and `fields[...]` were never documented: Scramble collects
+  operation extensions from its global extension list once, while its own
+  service provider boots (before this package's), so
+  `QueryBuilderOperationExtension` registered via `registerExtensions()`
+  never reached the operation pipeline. It is now appended to the pipeline
+  directly. The `config/scramble.php` workaround is no longer needed, but
+  keeping it is harmless (the extension is not run twice).
+
 ## [0.4.0] - 2026-07-23
 
 ### Added
