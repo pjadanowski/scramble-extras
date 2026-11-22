@@ -29,9 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correctly.
 - **`#[MinDigits]`/`#[MaxDigits]`/`#[Digits]`/`#[DigitsBetween]` on `int`**
   bound the value instead of emitting the digit count as `minimum`/`maximum`.
-- **`#[Min]`/`#[Max]`/`#[Size]` on arrays** set `minItems`/`maxItems`
-  (`#[Distinct]` sets `uniqueItems`); on uploaded files they are described
-  in kilobytes instead of emitted as string lengths.
+- **`#[Min]`/`#[Max]`/`#[Size]` on arrays** set `minItems`/`maxItems`; on
+  uploaded files they are described in kilobytes instead of emitted as
+  string lengths.
 - **Query builder:** filters with chained modifiers
   (`AllowedFilter::exact('x')->default(...)`), `AllowedSort::*` and
   `AllowedInclude::*` entries are documented; implicit `{relation}Count` /
@@ -41,7 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   instead of referencing the output component.
 - **Response schemas** mark nullable and defaulted properties as required
   (laravel-data always writes them).
-- **Native union types** (`int|string`) document every member.
+- **Native union types** (`int|string|null`) document every member.
 - **`#[Regex]` with modifiers** and **`#[DateFormat]`** are no longer
   documented with a different meaning.
 
