@@ -12,6 +12,8 @@ use PhpParser\Node\Identifier;
 use PhpParser\Node\Scalar\String_;
 use PhpParser\NodeVisitorAbstract;
 use Spatie\QueryBuilder\AllowedFilter;
+use Spatie\QueryBuilder\AllowedInclude;
+use Spatie\QueryBuilder\AllowedSort;
 use Spatie\QueryBuilder\QueryBuilder;
 
 /**
@@ -32,7 +34,7 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
 
     public ?string $defaultSort = null;
 
-    /** @var array<int, array{name: string, kind: string, description?: string, example?: mixed, format?: string}> */
+    /** @var array<int, array{name: string, kind: string, column?: string, description?: string, example?: mixed, format?: string}> */
     public array $filters = [];
 
     /** @var array<int, string> */
@@ -43,6 +45,14 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
 
     /** @var array<int, string> */
     public array $fields = [];
+
+    /**
+     * Includes declared as plain relationships (a string, or
+     * AllowedInclude::relationship()).
+     *
+     * @var array<int, string>
+     */
+    public array $relationshipIncludes = [];
 
     public function __construct(protected ?FileNameResolver $nameResolver) {}
 
@@ -67,10 +77,10 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
                 $this->filters = array_merge($this->filters, $this->extractFilterEntries($node));
                 break;
             case 'allowedSorts':
-                $this->sorts = array_merge($this->sorts, $this->extractStringList($node));
+                $this->sorts = array_merge($this->sorts, $this->extractBuilderNames($node, AllowedSort::class, 'AllowedSort'));
                 break;
             case 'allowedIncludes':
-                $this->includes = array_merge($this->includes, $this->extractStringList($node));
+                $this->includes = array_merge($this->includes, $this->extractIncludes($node));
                 break;
             case 'allowedFields':
                 $this->fields = array_merge($this->fields, $this->extractStringList($node));
@@ -93,11 +103,7 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
             return false;
         }
 
-        $resolved = $this->resolveClassName($node->class);
-
-        return $resolved === QueryBuilder::class
-            || (class_exists($resolved) && is_a($resolved, QueryBuilder::class, true))
-            || $resolved === 'QueryBuilder';
+        return $this->isClass($node->class, QueryBuilder::class, 'QueryBuilder');
     }
 
     /**
@@ -140,7 +146,11 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
             return $this->withDocAttributes(['name' => $expr->value, 'kind' => 'partial'], $hostForDoc);
         }
 
-        if ($expr instanceof StaticCall && $this->isAllowedFilter($expr)) {
+        // AllowedFilter::exact('x')->default(...)->ignore(...): the filter is
+        // defined by the static call at the root of the chain.
+        $expr = $this->chainRoot($expr);
+
+        if ($expr instanceof StaticCall && $this->isClass($expr->class, AllowedFilter::class, 'AllowedFilter')) {
             $kind = $expr->name instanceof Identifier ? $expr->name->name : null;
             $name = $this->extractFirstString($expr);
 
@@ -148,10 +158,134 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
                 return null;
             }
 
-            return $this->withDocAttributes(['name' => $name, 'kind' => $kind], $hostForDoc);
+            $entry = ['name' => $name, 'kind' => $kind];
+
+            // exact('name', 'internal_column'): the cast lives on the column.
+            $internalName = $expr->args[1]->value ?? null;
+            if ($internalName instanceof String_) {
+                $entry['column'] = $internalName->value;
+            }
+
+            return $this->withDocAttributes($entry, $hostForDoc);
         }
 
         return null;
+    }
+
+    /**
+     * Public names from a list of string literals and/or builder calls
+     * (`AllowedSort::field('name', 'column')->defaultDirection(...)`).
+     *
+     * @return array<int, string>
+     */
+    protected function extractBuilderNames(MethodCall $node, string $builderClass, string $shortName): array
+    {
+        $names = [];
+
+        foreach ($this->listItems($node) as $expr) {
+            if ($expr instanceof String_) {
+                $names[] = $expr->value;
+
+                continue;
+            }
+
+            $root = $this->chainRoot($expr);
+            if ($root instanceof StaticCall && $this->isClass($root->class, $builderClass, $shortName)) {
+                $name = $this->extractFirstString($root);
+                if ($name !== null) {
+                    $names[] = $name;
+                }
+            }
+        }
+
+        return $names;
+    }
+
+    /**
+     * Includes; the plain relationships among them are also recorded in
+     * $relationshipIncludes (the query builder adds `{relation}Count` and
+     * `{relation}Exists` includes for those).
+     *
+     * @return array<int, string>
+     */
+    protected function extractIncludes(MethodCall $node): array
+    {
+        $includes = [];
+        $relationships = [];
+
+        foreach ($this->listItems($node) as $expr) {
+            if ($expr instanceof String_) {
+                $includes[] = $relationships[] = $expr->value;
+
+                continue;
+            }
+
+            $root = $this->chainRoot($expr);
+            if (! $root instanceof StaticCall || ! $this->isClass($root->class, AllowedInclude::class, 'AllowedInclude')) {
+                continue;
+            }
+
+            $name = $this->extractFirstString($root);
+            if ($name === null) {
+                continue;
+            }
+
+            $includes[] = $name;
+            if ($root->name instanceof Identifier && $root->name->name === 'relationship') {
+                $relationships[] = $name;
+            }
+        }
+
+        $this->relationshipIncludes = array_values(array_unique(array_merge($this->relationshipIncludes, $relationships)));
+
+        return array_values(array_unique($includes));
+    }
+
+    /**
+     * The expressions passed to a variadic-or-array method like
+     * allowedSorts('a', 'b') / allowedSorts(['a', 'b']).
+     *
+     * @return array<int, Node\Expr>
+     */
+    protected function listItems(MethodCall $node): array
+    {
+        $items = [];
+
+        foreach ($node->args as $arg) {
+            if (! $arg instanceof Node\Arg) {
+                continue;
+            }
+
+            if ($arg->value instanceof Array_) {
+                foreach ($arg->value->items as $item) {
+                    if ($item) {
+                        $items[] = $item->value;
+                    }
+                }
+            } else {
+                $items[] = $arg->value;
+            }
+        }
+
+        return $items;
+    }
+
+    protected function chainRoot(?Node $expr): ?Node
+    {
+        while ($expr instanceof MethodCall) {
+            $expr = $expr->var;
+        }
+
+        return $expr;
+    }
+
+    protected function isClass(Node $class, string $fqcn, string $shortName): bool
+    {
+        $resolved = $this->resolveClassName($class);
+
+        return $resolved === $fqcn
+            || $resolved === $shortName
+            || ($resolved !== '' && class_exists($resolved) && is_a($resolved, $fqcn, true));
     }
 
     /**
@@ -176,15 +310,6 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
         }
 
         return $entry;
-    }
-
-    protected function isAllowedFilter(StaticCall $node): bool
-    {
-        $resolved = $this->resolveClassName($node->class);
-
-        return $resolved === AllowedFilter::class
-            || (class_exists($resolved) && is_a($resolved, AllowedFilter::class, true))
-            || $resolved === 'AllowedFilter';
     }
 
     /**

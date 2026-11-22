@@ -30,7 +30,7 @@
     "require-dev": {
         "orchestra/testbench": "^10.4",
         "phpunit/phpunit": "^11.5 || ^12.0",
-        "spatie/laravel-query-builder": "^6.0"
+        "spatie/laravel-query-builder": "^6.0 || ^7.0"
     },
     "suggest": {
         "spatie/laravel-query-builder": "Required to document `allowedFilters/Sorts/Includes/Fields`, `defaultSort`, and exact-enum filter detection."

@@ -94,9 +94,10 @@ class QueryBuilderOperationExtension extends OperationExtension
             $parameters[] = $param;
         }
 
-        if ($finder->includes !== []) {
+        $includes = $this->withImplicitIncludes($finder->includes, $finder->relationshipIncludes);
+        if ($includes !== []) {
             $description = 'Include related resources. Multiple values can be passed, separated via `,`. Allowed: `'
-                .implode('`, `', $finder->includes).'`';
+                .implode('`, `', $includes).'`';
 
             $parameters[] = (new Parameter('include', 'query'))
                 ->description($description)
@@ -127,7 +128,7 @@ class QueryBuilderOperationExtension extends OperationExtension
     }
 
     /**
-     * @param  array{name: string, kind: string, description?: string, example?: mixed, format?: string}  $filter
+     * @param  array{name: string, kind: string, column?: string, description?: string, example?: mixed, format?: string}  $filter
      * @param  array<string, array<int, scalar>>  $modelEnumCasts
      */
     protected function buildFilterParameter(array $filter, array $modelEnumCasts): Parameter
@@ -138,9 +139,11 @@ class QueryBuilderOperationExtension extends OperationExtension
             $type->format($filter['format']);
         }
 
-        // exact filter on an enum-cast column → emit enum schema.
-        if ($filter['kind'] === 'exact' && isset($modelEnumCasts[$filter['name']])) {
-            $type->enum($modelEnumCasts[$filter['name']]);
+        // exact filter on an enum-cast column → emit enum schema. An aliased
+        // filter (`exact('state', 'status')`) is cast by its internal column.
+        $column = $filter['column'] ?? $filter['name'];
+        if ($filter['kind'] === 'exact' && isset($modelEnumCasts[$column])) {
+            $type->enum($modelEnumCasts[$column]);
         }
 
         $description = $this->describeFilter($filter);
@@ -195,6 +198,13 @@ class QueryBuilderOperationExtension extends OperationExtension
                 return [];
             }
             $casts = $instance->getCasts();
+
+            // Laravel 11+ declares casts in a casts() method, merged into
+            // $casts by the model constructor - which isn't run here.
+            if (method_exists($instance, 'casts')) {
+                $castsMethod = new \ReflectionMethod($instance, 'casts');
+                $casts = array_merge($casts, (array) $castsMethod->invoke($instance));
+            }
         } catch (\Throwable) {
             return [];
         }
@@ -222,6 +232,29 @@ class QueryBuilderOperationExtension extends OperationExtension
         }
 
         return $result;
+    }
+
+    /**
+     * The query builder also allows `{relation}Count` and `{relation}Exists`
+     * for every top-level relationship include.
+     *
+     * @param  array<int, string>  $includes
+     * @param  array<int, string>  $relationships
+     * @return array<int, string>
+     */
+    protected function withImplicitIncludes(array $includes, array $relationships): array
+    {
+        $countSuffix = config('query-builder.count_suffix', 'Count');
+        $existsSuffix = config('query-builder.exists_suffix', 'Exists');
+
+        foreach ($relationships as $relationship) {
+            if (! str_contains($relationship, '.')) {
+                $includes[] = $relationship.$countSuffix;
+                $includes[] = $relationship.$existsSuffix;
+            }
+        }
+
+        return array_values(array_unique($includes));
     }
 
     /**
