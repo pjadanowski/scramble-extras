@@ -86,6 +86,10 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             if (class_exists(\Spatie\QueryBuilder\QueryBuilder::class)) {
                 $transformers->append(QueryBuilderOperationExtension::class);
             }
+
+            // After the query builder, whose jsonPaginate() page[number]
+            // takes precedence over a plain page parameter.
+            $transformers->append(PaginationParametersOperationExtension::class);
         });
 
         // resolveOperationMethodsUsing() doesn't exist before dedoc/scramble

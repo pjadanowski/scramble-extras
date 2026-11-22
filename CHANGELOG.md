@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **`page` / `cursor` query parameters** for GET routes returning a
+  `PaginatedDataCollection` / `CursorPaginatedDataCollection` (also through
+  `->toResponse($request)`), unless the operation already documents one.
+  Idea from HishamM1/scramble-extras.
 - **Query builder configuration outside the route method** is documented:
   lists held in local variables (`->allowedFilters($filters)`, including
   `...$sorts`), query builders set up in methods the route calls

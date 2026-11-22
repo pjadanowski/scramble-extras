@@ -41,6 +41,24 @@ class ReviewController
         return PlainData::collect([], PaginatedDataCollection::class);
     }
 
+    public function paginatedResponse(\Illuminate\Http\Request $request)
+    {
+        return PlainData::collect([], PaginatedDataCollection::class)->toResponse($request);
+    }
+
+    #[QueryParameter('page', description: 'Page to show.', type: 'int')]
+    public function paginatedDocumented()
+    {
+        return PlainData::collect([], PaginatedDataCollection::class);
+    }
+
+    public function paginatedJson()
+    {
+        QueryBuilder::for(Order::class)->jsonPaginate();
+
+        return PlainData::collect([], PaginatedDataCollection::class);
+    }
+
     public function cursorPaginated()
     {
         return PlainData::collect([], CursorPaginatedDataCollection::class);
