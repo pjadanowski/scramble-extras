@@ -25,6 +25,7 @@ use Spatie\LaravelData\Attributes\Computed;
 use Spatie\LaravelData\Attributes\DataCollectionOf;
 use Spatie\LaravelData\Attributes\Hidden;
 use Spatie\LaravelData\Optional;
+use Spatie\LaravelData\Support\DataConfig;
 use Spatie\LaravelData\Lazy;
 
 /**
@@ -92,7 +93,7 @@ class LaravelDataReflector
         $object = new OpenApiObjectType;
         $required = [];
 
-        $classMapper = $this->detectClassNameMapper($reflection);
+        $mappedNames = $this->mappedNames($dataClass, $input);
 
         $nameResolver = $reflection->getFileName()
             ? FileNameResolver::createForFile($reflection->getFileName())
@@ -103,7 +104,7 @@ class LaravelDataReflector
                 continue;
             }
 
-            $info = $this->describeProperty($property, $input, $classMapper, $nameResolver);
+            $info = $this->describeProperty($property, $input, $mappedNames[$property->getName()] ?? $property->getName(), $nameResolver);
             if ($info === null) {
                 continue;
             }
@@ -139,7 +140,8 @@ class LaravelDataReflector
      * every class named in a class/property attribute (`#[Enum(X::class)]`
      * inlines enum values, `#[MapName(SomeMapper::class)]` decides names).
      * Any of those files changing - in either direction, so a deploy that
-     * restores an older mtime counts too - invalidates the entry.
+     * restores an older mtime counts too - invalidates the entry, as does a
+     * change of config('data.name_mapping_strategy').
      */
     protected function fingerprint(string $class): string
     {
@@ -180,7 +182,7 @@ class LaravelDataReflector
 
         ksort($files);
 
-        return md5(serialize($files));
+        return md5(serialize([$files, config('data.name_mapping_strategy')]));
     }
 
     /**
@@ -289,7 +291,7 @@ class LaravelDataReflector
     /**
      * @return array{name: string, type: OpenApiType, required: bool}|null
      */
-    protected function describeProperty(ReflectionProperty $property, bool $input, ?\Closure $classMapper, ?FileNameResolver $nameResolver): ?array
+    protected function describeProperty(ReflectionProperty $property, bool $input, string $name, ?FileNameResolver $nameResolver): ?array
     {
         $isHidden = $this->hasAttribute($property, Hidden::class);
         $isComputed = $this->hasAttribute($property, Computed::class);
@@ -316,12 +318,12 @@ class LaravelDataReflector
                 continue;
             }
 
-            $name = $t->getName();
-            if (is_subclass_of($name, Optional::class) || $name === Optional::class) {
+            $typeName = $t->getName();
+            if (is_a($typeName, Optional::class, true)) {
                 $isOptional = true;
                 continue;
             }
-            if (is_subclass_of($name, Lazy::class) || $name === Lazy::class) {
+            if (is_a($typeName, Lazy::class, true)) {
                 $isLazy = true;
                 continue;
             }
@@ -356,8 +358,6 @@ class LaravelDataReflector
         if ($description !== '') {
             $openApiType->setDescription($description);
         }
-
-        $name = $this->resolveMappedName($property, $input, $classMapper);
 
         if (! $input && $isComputed) {
             // Computed properties are produced server-side on every output, so always required.
@@ -546,59 +546,23 @@ class LaravelDataReflector
         return trim(implode(' ', $description));
     }
 
-    protected function detectClassNameMapper(ReflectionClass $reflection): ?\Closure
+    /**
+     * The names spatie/laravel-data itself reads (input) or writes (output)
+     * for each property, taken from its own metadata so every mapping source
+     * is honoured: MapName(input, output), MapInputName, MapOutputName on the
+     * property or the class, and config('data.name_mapping_strategy').
+     *
+     * @return array<string, string> property name => mapped name
+     */
+    protected function mappedNames(string $dataClass, bool $input): array
     {
-        foreach ($reflection->getAttributes() as $attribute) {
-            if ($attribute->getName() !== \Spatie\LaravelData\Attributes\MapName::class) {
-                continue;
-            }
+        $names = [];
 
-            $args = $attribute->getArguments();
-            $mapper = $args[0] ?? null;
-            if (is_string($mapper) && class_exists($mapper)) {
-                $instance = new $mapper;
-
-                return static fn (string $name) => $instance->map($name);
-            }
+        foreach (app(DataConfig::class)->getDataClass($dataClass)->properties as $property) {
+            $mapped = $input ? $property->inputMappedName : $property->outputMappedName;
+            $names[$property->name] = $mapped ?? $property->name;
         }
 
-        return null;
-    }
-
-    protected function resolveMappedName(ReflectionProperty $property, bool $input, ?\Closure $classMapper): string
-    {
-        $name = $property->getName();
-
-        $perPropertyMapper = $this->getPerPropertyMapper($property, $input);
-        if ($perPropertyMapper !== null) {
-            return $perPropertyMapper($name);
-        }
-
-        return $classMapper ? $classMapper($name) : $name;
-    }
-
-    protected function getPerPropertyMapper(ReflectionProperty $property, bool $input): ?\Closure
-    {
-        $targetAttr = $input
-            ? \Spatie\LaravelData\Attributes\MapInputName::class
-            : \Spatie\LaravelData\Attributes\MapName::class;
-
-        foreach ($property->getAttributes() as $attribute) {
-            if ($attribute->getName() !== $targetAttr) {
-                continue;
-            }
-            $args = $attribute->getArguments();
-            $mapper = $args[0] ?? null;
-            if (is_string($mapper) && class_exists($mapper)) {
-                $instance = new $mapper;
-
-                return static fn (string $n) => $instance->map($n);
-            }
-            if (is_string($mapper)) {
-                return static fn () => $mapper;
-            }
-        }
-
-        return null;
+        return $names;
     }
 }

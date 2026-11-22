@@ -11,4 +11,14 @@ class ReviewController
     {
         return ConstraintsData::from([]);
     }
+
+    public function storeMapped(MappedData $data): MappedData
+    {
+        return $data;
+    }
+
+    public function storePlain(PlainData $data): PlainData
+    {
+        return $data;
+    }
 }
