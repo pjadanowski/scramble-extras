@@ -81,4 +81,38 @@ class ReviewController
     {
         return ChildInputData::from(['child_name' => 'x']);
     }
+
+    public function storeCollectionParent(CollectionParentData $data): CollectionParentData
+    {
+        return $data;
+    }
+
+    /**
+     * The include list shared by the documentation and the runtime test.
+     *
+     * @return array<int, mixed>
+     */
+    public static function includeList(): array
+    {
+        return [
+            'customer',
+            'postsCount',
+            'items.product',
+            AllowedInclude::relationship('owner'),
+            AllowedInclude::count('itemsCount'),
+        ];
+    }
+
+    public function includes(): array
+    {
+        QueryBuilder::for(Order::class)->allowedIncludes(
+            'customer',
+            'postsCount',
+            'items.product',
+            AllowedInclude::relationship('owner'),
+            AllowedInclude::count('itemsCount'),
+        );
+
+        return [];
+    }
 }

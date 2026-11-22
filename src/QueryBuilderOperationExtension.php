@@ -94,7 +94,7 @@ class QueryBuilderOperationExtension extends OperationExtension
             $parameters[] = $param;
         }
 
-        $includes = $this->withImplicitIncludes($finder->includes, $finder->relationshipIncludes);
+        $includes = $this->expandIncludes($finder->includeEntries);
         if ($includes !== []) {
             $description = 'Include related resources. Multiple values can be passed, separated via `,`. Allowed: `'
                 .implode('`, `', $includes).'`';
@@ -235,26 +235,67 @@ class QueryBuilderOperationExtension extends OperationExtension
     }
 
     /**
-     * The query builder also allows `{relation}Count` and `{relation}Exists`
-     * for every top-level relationship include.
+     * The include names the query builder actually allows for the declared
+     * includes (same rules in spatie/laravel-query-builder 6 and 7):
+     *  - a string ending in the count/exists suffix allows only itself;
+     *  - any other string allows every segment of its path (`a.b` allows `a`
+     *    and `a.b`) plus `{segment}Count` / `{segment}Exists` for the
+     *    top-level segment;
+     *  - AllowedInclude::relationship() expands the same way in v6, and
+     *    allows only its own name in v7;
+     *  - other builders (count, exists, callback, custom) allow their name.
      *
-     * @param  array<int, string>  $includes
-     * @param  array<int, string>  $relationships
+     * @param  array<int, array{name: string, kind: string}>  $entries
      * @return array<int, string>
      */
-    protected function withImplicitIncludes(array $includes, array $relationships): array
+    protected function expandIncludes(array $entries): array
     {
-        $countSuffix = config('query-builder.count_suffix', 'Count');
-        $existsSuffix = config('query-builder.exists_suffix', 'Exists');
+        $countSuffix = config('query-builder.suffixes.count') ?? config('query-builder.count_suffix') ?? 'Count';
+        $existsSuffix = config('query-builder.suffixes.exists') ?? config('query-builder.exists_suffix') ?? 'Exists';
 
-        foreach ($relationships as $relationship) {
-            if (! str_contains($relationship, '.')) {
-                $includes[] = $relationship.$countSuffix;
-                $includes[] = $relationship.$existsSuffix;
+        $includes = [];
+
+        foreach ($entries as ['name' => $name, 'kind' => $kind]) {
+            $expands = match ($kind) {
+                'string' => ! str_ends_with($name, $countSuffix) && ! str_ends_with($name, $existsSuffix),
+                'relationship' => $this->relationshipBuilderExpands(),
+                default => false,
+            };
+
+            if (! $expands) {
+                $includes[] = $name;
+
+                continue;
+            }
+
+            $path = [];
+            foreach (explode('.', $name) as $segment) {
+                $path[] = $segment;
+                $includes[] = implode('.', $path);
+
+                if (count($path) === 1) {
+                    $includes[] = $segment.$countSuffix;
+                    $includes[] = $segment.$existsSuffix;
+                }
             }
         }
 
         return array_values(array_unique($includes));
+    }
+
+    /**
+     * In v6, AllowedInclude::relationship() returns a collection of the
+     * relationship plus its count/exists includes; in v7 a single include.
+     */
+    protected function relationshipBuilderExpands(): bool
+    {
+        if (! class_exists(\Spatie\QueryBuilder\AllowedInclude::class)) {
+            return false;
+        }
+
+        $returnType = (new \ReflectionMethod(\Spatie\QueryBuilder\AllowedInclude::class, 'relationship'))->getReturnType();
+
+        return $returnType instanceof \ReflectionNamedType && is_a($returnType->getName(), \Illuminate\Support\Collection::class, true);
     }
 
     /**

@@ -47,12 +47,13 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
     public array $fields = [];
 
     /**
-     * Includes declared as plain relationships (a string, or
-     * AllowedInclude::relationship()).
+     * Every include as declared, with how it was declared - the query
+     * builder expands a string and AllowedInclude::relationship() into more
+     * includes (see QueryBuilderOperationExtension::expandIncludes()).
      *
-     * @var array<int, string>
+     * @var array<int, array{name: string, kind: 'string'|'relationship'|'builder'}>
      */
-    public array $relationshipIncludes = [];
+    public array $includeEntries = [];
 
     public function __construct(protected ?FileNameResolver $nameResolver) {}
 
@@ -202,20 +203,19 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
     }
 
     /**
-     * Includes; the plain relationships among them are also recorded in
-     * $relationshipIncludes (the query builder adds `{relation}Count` and
-     * `{relation}Exists` includes for those).
+     * Include names as declared; each is also recorded in $includeEntries
+     * with how it was declared.
      *
      * @return array<int, string>
      */
     protected function extractIncludes(MethodCall $node): array
     {
         $includes = [];
-        $relationships = [];
 
         foreach ($this->listItems($node) as $expr) {
             if ($expr instanceof String_) {
-                $includes[] = $relationships[] = $expr->value;
+                $includes[] = $expr->value;
+                $this->includeEntries[] = ['name' => $expr->value, 'kind' => 'string'];
 
                 continue;
             }
@@ -230,15 +230,12 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
                 continue;
             }
 
+            $isRelationship = $root->name instanceof Identifier && $root->name->name === 'relationship';
             $includes[] = $name;
-            if ($root->name instanceof Identifier && $root->name->name === 'relationship') {
-                $relationships[] = $name;
-            }
+            $this->includeEntries[] = ['name' => $name, 'kind' => $isRelationship ? 'relationship' : 'builder'];
         }
 
-        $this->relationshipIncludes = array_values(array_unique(array_merge($this->relationshipIncludes, $relationships)));
-
-        return array_values(array_unique($includes));
+        return $includes;
     }
 
     /**

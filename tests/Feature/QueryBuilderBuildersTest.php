@@ -5,7 +5,10 @@ namespace PawelJadanowski\ScrambleExtras\Tests\Feature;
 use Dedoc\Scramble\Generator;
 use PawelJadanowski\ScrambleExtras\Tests\Fixtures\ReviewController;
 use PawelJadanowski\ScrambleExtras\Tests\TestCase;
+use Illuminate\Http\Request;
+use PawelJadanowski\ScrambleExtras\Tests\Fixtures\Order;
 use PHPUnit\Framework\Attributes\Test;
+use Spatie\QueryBuilder\QueryBuilder;
 
 /**
  * Filters, sorts and includes declared with the builder classes
@@ -17,17 +20,18 @@ class QueryBuilderBuildersTest extends TestCase
     protected function defineRoutes($router): void
     {
         $router->get('api/orders', [ReviewController::class, 'orders']);
+        $router->get('api/includes', [ReviewController::class, 'includes']);
     }
 
     /**
      * @return \Illuminate\Support\Collection<string, array<string, mixed>>
      */
-    private function parameters(): \Illuminate\Support\Collection
+    private function parameters(string $path = '/orders'): \Illuminate\Support\Collection
     {
         $result = app(Generator::class)();
         $openApi = is_array($result) ? $result : $result->toArray();
 
-        return collect($openApi['paths']['/orders']['get']['parameters'] ?? [])->keyBy('name');
+        return collect($openApi['paths'][$path]['get']['parameters'] ?? [])->keyBy('name');
     }
 
     #[Test]
@@ -63,14 +67,32 @@ class QueryBuilderBuildersTest extends TestCase
     }
 
     #[Test]
-    public function includes_list_implicit_count_and_exists_and_builders(): void
+    public function documented_includes_match_what_the_installed_query_builder_allows(): void
     {
-        $description = $this->parameters()['include']['description'];
+        $builder = QueryBuilder::for(Order::class, new Request)->allowedIncludes(...ReviewController::includeList());
+        $allowed = (new \ReflectionProperty($builder, 'allowedIncludes'))->getValue($builder)
+            ->map(fn ($include) => $include->getName())
+            ->values()
+            ->all();
 
-        foreach (['`customer`', '`customerCount`', '`customerExists`', '`items.product`', '`itemsCount`'] as $include) {
-            $this->assertStringContainsString($include, $description);
-        }
-        // Count/exists are only added for top-level relationships.
-        $this->assertStringNotContainsString('items.productCount', $description);
+        $description = $this->parameters('/includes')['include']['description'];
+        preg_match_all('/`([^`]+)`/', substr($description, strpos($description, 'Allowed:')), $m);
+
+        $this->assertEqualsCanonicalizing($allowed, $m[1]);
+    }
+
+    #[Test]
+    public function include_suffixes_follow_the_query_builder_config(): void
+    {
+        config([
+            'query-builder.suffixes' => ['count' => 'Total', 'exists' => 'Present'],
+            'query-builder.count_suffix' => 'Total',
+            'query-builder.exists_suffix' => 'Present',
+        ]);
+
+        $description = $this->parameters('/includes')['include']['description'];
+
+        $this->assertStringContainsString('`customerTotal`', $description);
+        $this->assertStringContainsString('`customerPresent`', $description);
     }
 }
