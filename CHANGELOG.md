@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **File uploads.** `UploadedFile` properties are binary fields (they were
+  `type: object`), and a `Data` body containing one is
+  `multipart/form-data` with bracket keys for nested values
+  (`address[city]`, `tags[]`). Files narrowed by `#[Image]` count too.
+  Idea from HishamM1/scramble-extras.
 - **`page` / `cursor` query parameters** for GET routes returning a
   `PaginatedDataCollection` / `CursorPaginatedDataCollection` (also through
   `->toResponse($request)`), unless the operation already documents one.

@@ -98,13 +98,14 @@ php artisan scramble-extras:cache:clear
 
 A `Data` class is often used as both a response and a request body, and the two projections differ — `#[Computed]` is output-only, `#[Hidden]` is input-only, and `Optional` / `#[MapInputName]` change required-ness and field names. To keep both faithful, **request body schemas are inlined** (rendered directly on the operation) instead of `$ref`-ing the shared output component, and so are `Data` classes nested inside them, each with its own input projection. Response schemas remain reusable `$ref` components. (A `Data` class that contains itself, directly or indirectly, references its component at the point where it recurses.)
 
+A `Data` class with `UploadedFile` properties is documented as a `multipart/form-data` body: files are binary fields, and nested values use the bracket keys PHP parses back into arrays (`address[city]`, `tags[]`).
+
 On `GET`, `DELETE` and `HEAD` routes, where laravel-data reads the query string, a `Data` argument is documented as one query parameter per property.
 
 ## What's NOT covered (yet)
 
 Long-tail features still on the roadmap:
 
-- `multipart/form-data` request bodies for `Data` classes containing `UploadedFile` properties
 - Sparse fieldsets rendered as proper enum array params (currently emitted as `string` with allowed values in the description)
 - Polymorphic `Data` with discriminator schemas
 

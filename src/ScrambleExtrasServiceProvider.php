@@ -52,6 +52,7 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             PaginatedDataCollectionTypeToSchemaExtension::class,
             CursorPaginatedDataCollectionTypeToSchemaExtension::class,
             DataCollectionTypeToSchemaExtension::class,
+            UploadedFileTypeToSchemaExtension::class,
             LaravelDataReturnTypeExtension::class,
             LaravelDataResponseMethodReturnTypeExtension::class,
         ];
@@ -75,6 +76,7 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             $transformers->prepend(LaravelDataValidationExceptionExtension::class);
             $transformers->append(RouteWhereInParameterExtension::class);
             $transformers->append(MethodAwareOperationIdExtension::class);
+            $transformers->append(MultipartRequestBodyExtension::class);
 
             // Appended directly rather than via registerExtensions(): Scramble
             // collects OperationExtension classes from Scramble::$extensions
