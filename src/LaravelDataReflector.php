@@ -17,6 +17,7 @@ use Dedoc\Scramble\Support\Generator\Types\UnknownType as OpenApiUnknownType;
 use Dedoc\Scramble\Support\Generator\TypeTransformer;
 use Dedoc\Scramble\Support\PhpDoc;
 use Dedoc\Scramble\Support\Type\ObjectType as ScrambleObjectType;
+use Illuminate\Support\Arr;
 use PHPStan\PhpDocParser\Ast\PhpDoc\PhpDocTextNode;
 use PHPStan\PhpDocParser\Ast\Type\TypeNode;
 use ReflectionClass;
@@ -26,9 +27,14 @@ use ReflectionUnionType;
 use Spatie\LaravelData\Attributes\Computed;
 use Spatie\LaravelData\Attributes\DataCollectionOf;
 use Spatie\LaravelData\Attributes\Hidden;
+use Spatie\LaravelData\Attributes\Validation\DateFormat;
+use Spatie\LaravelData\Attributes\WithCast;
+use Spatie\LaravelData\Attributes\WithTransformer;
+use Spatie\LaravelData\Casts\DateTimeInterfaceCast;
 use Spatie\LaravelData\Optional;
 use Spatie\LaravelData\Support\DataConfig;
 use Spatie\LaravelData\Lazy;
+use Spatie\LaravelData\Transformers\DateTimeInterfaceTransformer;
 
 /**
  * Inspects a spatie/laravel-data class and produces an OpenAPI ObjectType.
@@ -195,7 +201,7 @@ class LaravelDataReflector
      * inlines enum values, `#[MapName(SomeMapper::class)]` decides names).
      * Any of those files changing - in either direction, so a deploy that
      * restores an older mtime counts too - invalidates the entry, as does a
-     * change of config('data.name_mapping_strategy').
+     * change of config('data.name_mapping_strategy') or config('data.date_format').
      */
     protected function fingerprint(string $class): string
     {
@@ -236,7 +242,7 @@ class LaravelDataReflector
 
         ksort($files);
 
-        return md5(serialize([$files, config('data.name_mapping_strategy')]));
+        return md5(serialize([$files, config('data.name_mapping_strategy'), config('data.date_format')]));
     }
 
     /**
@@ -433,6 +439,7 @@ class LaravelDataReflector
         $applier = new SchemaAttributeApplier;
         $analysis = $applier->analyze($property, $openApiType);
         $openApiType = $analysis->type;
+        $this->applyDateTransformFormat($property, $analysis, $applier, $input);
         $applier->applyExamplesFromPhpDoc($property, $openApiType);
 
         $description = $this->buildDescription(
@@ -461,6 +468,61 @@ class LaravelDataReflector
             'type' => $openApiType,
             'required' => $required,
         ];
+    }
+
+    /**
+     * laravel-data writes dates with DateTimeInterfaceTransformer and reads
+     * them with DateTimeInterfaceCast, in the format given to
+     * #[WithTransformer] / #[WithCast] or else config('data.date_format').
+     * Output uses one format (the first); input accepts any of them. Only
+     * applies to properties Scramble typed as date-time (DateTimeInterface)
+     * and not to custom transformers/casts, whose output we can't know. On
+     * input, a #[DateFormat] validation attribute already said it.
+     */
+    protected function applyDateTransformFormat(
+        ReflectionProperty $property,
+        AttributeAnalysis $analysis,
+        SchemaAttributeApplier $applier,
+        bool $input,
+    ): void {
+        $type = $analysis->type;
+
+        if (! $type instanceof OpenApiStringType || $type->format !== 'date-time') {
+            return;
+        }
+
+        if ($input && $this->hasAttribute($property, DateFormat::class)) {
+            return;
+        }
+
+        [$attribute, $expected] = $input
+            ? [WithCast::class, DateTimeInterfaceCast::class]
+            : [WithTransformer::class, DateTimeInterfaceTransformer::class];
+
+        $formats = null;
+
+        foreach ($property->getAttributes($attribute) as $reflectionAttribute) {
+            $arguments = $reflectionAttribute->getArguments();
+            $class = $arguments[0] ?? $arguments['castClass'] ?? $arguments['transformerClass'] ?? null;
+
+            if (! is_string($class) || ! is_a($class, $expected, true)) {
+                return;
+            }
+
+            $formats = $arguments['format'] ?? $arguments[1] ?? null;
+        }
+
+        $formats = Arr::wrap($formats ?? config('data.date_format'));
+
+        if (! $input) {
+            $formats = array_slice(array_values($formats), 0, 1);
+        }
+
+        $note = $applier->describeDateFormats($type, $formats);
+
+        if ($note !== null) {
+            $analysis->addNote($note);
+        }
     }
 
     /**

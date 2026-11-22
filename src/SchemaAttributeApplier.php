@@ -220,21 +220,42 @@ class SchemaAttributeApplier
      */
     protected function applyDateFormat(AttributeAnalysis $a, array $args): void
     {
-        $formats = array_values(array_filter(Arr::flatten($args), 'is_string'));
+        $note = $this->describeDateFormats($a->type, Arr::flatten($args));
+
+        if ($note !== null) {
+            $a->addNote($note);
+        }
+    }
+
+    /**
+     * Documents values written or accepted in the given PHP date formats:
+     * one format with an OpenAPI equivalent becomes that `format`; anything
+     * else clears the format the base type carries (Scramble documents
+     * Carbon as date-time, which would contradict it) and returns a note.
+     *
+     * @param  array<int, mixed>  $formats
+     */
+    public function describeDateFormats(OpenApiType $type, array $formats): ?string
+    {
+        // A leading "!" (reset unparsed fields) doesn't change the output.
+        $formats = array_values(array_map(
+            fn (string $format) => ltrim($format, '!'),
+            array_filter($formats, 'is_string'),
+        ));
+
         if ($formats === []) {
-            return;
+            return null;
         }
 
         if (count($formats) === 1 && isset(self::DATE_FORMATS[$formats[0]])) {
-            $a->type->format(self::DATE_FORMATS[$formats[0]]);
+            $type->format(self::DATE_FORMATS[$formats[0]]);
 
-            return;
+            return null;
         }
 
-        // A format the base type carries (Scramble documents Carbon as
-        // date-time) would contradict the rule.
-        $a->type->format('');
-        $a->addNote('Date format: '.implode(' or ', array_map(fn ($f) => "`$f`", $formats)).' (PHP date format).');
+        $type->format('');
+
+        return 'Date format: '.implode(' or ', array_map(fn ($f) => "`$f`", $formats)).' (PHP date format).';
     }
 
     protected function applyMin(AttributeAnalysis $a, mixed $value): void

@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [HishamM1/scramble-extras](https://github.com/HishamM1/scramble-extras).
 
 ### Fixed
+- **Date formats from transformers and casts.** A `Carbon` property was
+  always documented as `date-time`. It now follows the format laravel-data
+  really uses: `#[WithTransformer(DateTimeInterfaceTransformer::class,
+  format: ...)]` for responses, `#[WithCast(DateTimeInterfaceCast::class,
+  format: ...)]` for requests, otherwise `config('data.date_format')`
+  (`Y-m-d` → `date`; formats without an OpenAPI equivalent become a note).
+  Idea from HishamM1/scramble-extras.
 - **Data classes with `rules()`** got a second request body: Scramble takes
   any class with `rules()` for a form request, so the body became an
   `allOf` of the Data schema and a stray FQCN-named component. The
