@@ -6,10 +6,10 @@ A free, open Laravel package that adds full **Spatie ecosystem** support to [ded
 
 ## Features
 
-- **Spatie Laravel Data** — output and input (request body) schemas auto-generated from your `Data` classes. Honors `MapName`/`MapInputName`, `Optional`, `Lazy`, `#[Computed]`, `#[Hidden]`, `#[DataCollectionOf]`, and reads `@example`/`@default` from property phpdoc.
-- **All ~80 Spatie validation attributes → OpenAPI fields** — `#[Email]` → `format: email`, `#[Min(3)]` → `minLength`, `#[GreaterThan(0)]` → `exclusiveMinimum`, `#[In(...)]` / `#[Enum(SomeEnum::class)]` → `enum`, `#[Regex]` → `pattern`, `#[Image]` → `contentMediaType: image/*`, plus description notes for `#[Same]`, `#[Confirmed]`, `#[Exists]`, `#[RequiredIf]`, etc.
-- **`PaginatedDataCollection<T>`, `CursorPaginatedDataCollection<T>`, `DataCollection<T>`** — proper response envelopes (Laravel paginator format / cursor format / plain array).
-- **Spatie Laravel Query Builder** — `allowedFilters` / `allowedSorts` / `allowedIncludes` / `allowedFields` / `defaultSort` / `jsonPaginate()` parsed via AST. `AllowedFilter::exact($column)` on an enum-cast Eloquent column emits `enum: [...]` automatically.
+- **Spatie Laravel Data** — output and input (request body) schemas auto-generated from your `Data` classes. Honors `MapName`/`MapInputName`/`MapOutputName` and `data.name_mapping_strategy` (names come from laravel-data's own metadata), `Optional`, `Lazy`, `#[Computed]`, `#[Hidden]`, `#[DataCollectionOf]`, and reads `@example`/`@default` from property phpdoc.
+- **All ~80 Spatie validation attributes → OpenAPI fields** — `#[Email]` → `format: email`, `#[Min(3)]` → `minLength` (`minItems` on arrays), `#[GreaterThan(0)]` → `exclusiveMinimum`, `#[In(...)]` / `#[Enum(SomeEnum::class)]` → `enum`, `#[Regex]` → `pattern`, `#[Image]` → `contentMediaType: image/*`, plus description notes for `#[Same]`, `#[Confirmed]`, `#[Exists]`, `#[RequiredIf]`, etc.
+- **`PaginatedDataCollection<T>`, `CursorPaginatedDataCollection<T>`, `DataCollection<T>`** — the response envelopes laravel-data actually returns (`data` + `links` + `meta`, for length-aware and cursor pagination) / plain array.
+- **Spatie Laravel Query Builder** — `allowedFilters` / `allowedSorts` / `allowedIncludes` / `allowedFields` / `defaultSort` / `jsonPaginate()` parsed via AST, including `AllowedFilter::*` / `AllowedSort::*` / `AllowedInclude::*` builders with chained modifiers and the implicit `{relation}Count` / `{relation}Exists` includes. `AllowedFilter::exact($column)` on an enum-cast Eloquent column (`$casts` or `casts()`) emits `enum: [...]` automatically.
 - **Persistent schema cache** — file-based, invalidated per class when its source (or a parent class, trait or attribute-referenced class) changes. `php artisan scramble-extras:cache:clear` to wipe.
 - **422 for `Data`-typed actions** — a controller action type-hinted with a `Data` class is validated the same way a `FormRequest` would be, so it now documents a `422` response the same way core Scramble already does for `FormRequest`.
 - **`PATCH` documented alongside `PUT`** — Scramble's default route-methods resolver only documents the first HTTP method a route responds to, so `Route::apiResource()`'s update action (registered for both `PUT` and `PATCH`) only ever got a `put` operation. Opt out with `SCRAMBLE_EXTRAS_EXPAND_ROUTE_METHODS=false`. Requires a `dedoc/scramble` version with `GeneratorConfig::resolveOperationMethodsUsing()` (added after this package's 0.13.0 floor); on older installs this feature is a no-op rather than an error.
@@ -17,8 +17,10 @@ A free, open Laravel package that adds full **Spatie ecosystem** support to [ded
 ## Requirements
 
 - PHP 8.2+
-- Laravel 11, 12, or 13
-- `dedoc/scramble` ^0.12.20
+- Laravel 11, 12, or 13 (CI tests 12 and 13)
+- `dedoc/scramble` ^0.13.0
+- `spatie/laravel-data` ^4.0
+- optionally `spatie/laravel-query-builder` (tested with 6.x and 7.x)
 
 ## Install
 
