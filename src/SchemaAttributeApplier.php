@@ -105,7 +105,7 @@ class SchemaAttributeApplier
             $name === V\MaxDigits::class => $this->applyMaxDigits($a, $args[0] ?? null),
 
             // --- Patterns ---------------------------------------------------
-            $name === V\Regex::class => $this->applyPattern($a, $this->trimDelimiters($args[0] ?? null)),
+            $name === V\Regex::class => $this->applyRegex($a, $args[0] ?? null),
             $name === V\NotRegex::class => $a->addNote('Must not match pattern '.$this->stringify($args[0] ?? null)),
             $name === V\Alpha::class => $this->applyPattern($a, '^[A-Za-z]+$'),
             $name === V\AlphaDash::class => $this->applyPattern($a, '^[A-Za-z0-9_-]+$'),
@@ -201,14 +201,35 @@ class SchemaAttributeApplier
     }
 
     /**
+     * PHP date formats that correspond to an OpenAPI/JSON Schema format.
+     */
+    private const DATE_FORMATS = [
+        'Y-m-d' => 'date',
+        'Y-m-d\\TH:i:sP' => 'date-time',
+        'Y-m-d\\TH:i:sp' => 'date-time',
+        'Y-m-d\\TH:i:s.vP' => 'date-time',
+        'Y-m-d\\TH:i:s.uP' => 'date-time',
+        'c' => 'date-time',
+        'H:i:s' => 'time',
+    ];
+
+    /**
      * @param  array<int, mixed>  $args
      */
     protected function applyDateFormat(AttributeAnalysis $a, array $args): void
     {
-        $values = Arr::flatten($args);
-        if (count($values) === 1 && is_string($values[0])) {
-            $a->type->format($values[0]);
+        $formats = array_values(array_filter(Arr::flatten($args), 'is_string'));
+        if ($formats === []) {
+            return;
         }
+
+        if (count($formats) === 1 && isset(self::DATE_FORMATS[$formats[0]])) {
+            $a->type->format(self::DATE_FORMATS[$formats[0]]);
+
+            return;
+        }
+
+        $a->addNote('Date format: '.implode(' or ', array_map(fn ($f) => "`$f`", $formats)).' (PHP date format).');
     }
 
     protected function applyMin(AttributeAnalysis $a, mixed $value): void
@@ -517,17 +538,39 @@ class SchemaAttributeApplier
         $a->type = $newType;
     }
 
-    protected function trimDelimiters(mixed $pattern): ?string
+    /**
+     * A PCRE pattern becomes a JSON Schema `pattern` when it can be carried
+     * over as is: delimiters are dropped, but modifiers (`/i`, `/u`, ...)
+     * can't be expressed there, so a pattern with modifiers is described in
+     * a note instead of being documented with a different meaning.
+     */
+    protected function applyRegex(AttributeAnalysis $a, mixed $regex): void
     {
-        if (! is_string($pattern)) {
-            return null;
+        if (! is_string($regex) || $regex === '') {
+            return;
         }
 
-        if (preg_match('/^(.)(.*)\1[a-zA-Z]*$/s', $pattern, $m)) {
-            return $m[2];
+        $closing = ['{' => '}', '(' => ')', '[' => ']', '<' => '>'];
+        $open = $regex[0];
+        $close = $closing[$open] ?? $open;
+        $end = strrpos($regex, $close);
+
+        if (ctype_alnum($open) || $open === '\\' || $end === false || $end === 0) {
+            $this->applyPattern($a, $regex);
+
+            return;
         }
 
-        return $pattern;
+        $pattern = substr($regex, 1, $end - 1);
+        $modifiers = substr($regex, $end + 1);
+
+        if ($modifiers !== '') {
+            $a->addNote("Must match pattern `{$regex}`.");
+
+            return;
+        }
+
+        $this->applyPattern($a, $pattern);
     }
 
     /**

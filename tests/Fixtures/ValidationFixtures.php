@@ -121,4 +121,19 @@ class ValidationFixtures
 
     #[V\File, V\Max(1024)]
     public string $fileByAttribute;
+
+    #[V\Regex('/^[a-z]+$/i')]
+    public string $caseInsensitiveRegex;
+
+    #[V\Regex('{^\d+$}')]
+    public string $braceDelimitedRegex;
+
+    #[V\DateFormat('Y-m-d')]
+    public string $isoDate;
+
+    #[V\DateFormat('Y-m-d\TH:i:sP')]
+    public string $isoDateTime;
+
+    #[V\DateFormat('d/m/Y')]
+    public string $customDate;
 }

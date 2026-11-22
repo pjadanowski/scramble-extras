@@ -307,4 +307,30 @@ class SchemaAttributeApplierTest extends TestCase
             $this->assertStringContainsString('kilobytes', implode(' ', $analysis->notes), $property);
         }
     }
+
+    #[Test]
+    public function regex_with_flags_becomes_a_note_not_a_wrong_pattern(): void
+    {
+        $analysis = $this->analyze('caseInsensitiveRegex', new StringType);
+
+        $this->assertArrayNotHasKey('pattern', $analysis->type->toArray());
+        $this->assertStringContainsString('/^[a-z]+$/i', implode(' ', $analysis->notes));
+    }
+
+    #[Test]
+    public function regex_with_bracket_delimiters_is_unwrapped(): void
+    {
+        $this->assertSame('^\d+$', $this->analyze('braceDelimitedRegex', new StringType)->type->toArray()['pattern'] ?? null);
+    }
+
+    #[Test]
+    public function date_format_maps_to_openapi_formats_or_a_note(): void
+    {
+        $this->assertSame('date', $this->analyze('isoDate', new StringType)->type->toArray()['format'] ?? null);
+        $this->assertSame('date-time', $this->analyze('isoDateTime', new StringType)->type->toArray()['format'] ?? null);
+
+        $custom = $this->analyze('customDate', new StringType);
+        $this->assertArrayNotHasKey('format', $custom->type->toArray());
+        $this->assertStringContainsString('d/m/Y', implode(' ', $custom->notes));
+    }
 }
