@@ -34,6 +34,18 @@ To document `allowedFilters/Sorts/Includes/Fields` you also need `spatie/laravel
 composer require spatie/laravel-query-builder
 ```
 
+## Pairs well with Atlas
+
+[**Atlas**](https://github.com/pjadanowski/atlas) is a drop-in renderer for Scramble: fast, fully static, three-column API docs with search, a try-it console and code samples in 12 clients. scramble-extras makes the generated OpenAPI document complete (Data schemas, validation constraints, query-builder parameters), and Atlas renders it.
+
+```bash
+composer require pjadanowski/atlas
+```
+
+Then set `'renderer' => 'atlas'` in `config/scramble.php`. See the [Atlas README](https://github.com/pjadanowski/atlas#laravel--scramble) for details.
+
+![Atlas endpoint page](https://raw.githubusercontent.com/pjadanowski/atlas/main/docs/screenshots/endpoint-light.png)
+
 ## Configuration
 
 There's nothing to configure to get started. If you want to tune the cache, publish the config:
