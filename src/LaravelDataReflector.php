@@ -56,14 +56,25 @@ class LaravelDataReflector
     protected static array $inputStack = [];
 
     /**
-     * Whether a nested Data class met right now should be inlined as input:
-     * an input schema is being built, and the class isn't already being
-     * built further up (a self-referencing Data would recurse forever; it
-     * falls back to its output component).
+     * Attribute put on object types met while building an input schema. It
+     * marks them for inlining as input, and makes Scramble's TypeTransformer
+     * skip its cache for them.
      */
-    public static function shouldInlineAsInput(string $dataClass): bool
+    public const INPUT_ATTRIBUTE = 'scramble-extras:input';
+
+    /**
+     * Whether a nested Data type should be inlined with its input projection:
+     * an input schema is being built, the type was met by that build (tagged
+     * with INPUT_ATTRIBUTE - an untagged type may be another component being
+     * built along the way, which must stay output), and the class isn't
+     * already being built further up (a self-referencing Data would recurse
+     * forever; it falls back to its output component).
+     */
+    public static function shouldInlineAsInput(\Dedoc\Scramble\Support\Type\ObjectType $type): bool
     {
-        return self::$inputStack !== [] && ! in_array($dataClass, self::$inputStack, true);
+        return self::$inputStack !== []
+            && $type->getAttribute(self::INPUT_ATTRIBUTE) === true
+            && ! in_array($type->name, self::$inputStack, true);
     }
 
     public function __construct(
@@ -303,7 +314,7 @@ class LaravelDataReflector
         }
 
         if ($type instanceof ScrambleObjectType) {
-            $type->setAttribute('scramble-extras:input', true);
+            $type->setAttribute(self::INPUT_ATTRIBUTE, true);
 
             if ($type instanceof \Dedoc\Scramble\Support\Type\Generic) {
                 array_map($this->bypassTransformCacheForInput(...), $type->templateTypes);

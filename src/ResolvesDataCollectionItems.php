@@ -44,6 +44,14 @@ trait ResolvesDataCollectionItems
             return new OpenApiObjectType;
         }
 
-        return $this->openApiTransformer->transform(new ScrambleObjectType($itemClass));
+        $itemType = new ScrambleObjectType($itemClass);
+
+        // Inside a request body, the collection's item carries the input tag
+        // (see LaravelDataReflector::INPUT_ATTRIBUTE); keep it on the item.
+        if ($type->getAttribute(LaravelDataReflector::INPUT_ATTRIBUTE) === true) {
+            $itemType->setAttribute(LaravelDataReflector::INPUT_ATTRIBUTE, true);
+        }
+
+        return $this->openApiTransformer->transform($itemType);
     }
 }

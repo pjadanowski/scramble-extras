@@ -41,7 +41,7 @@ class LaravelDataTypeToSchemaExtension extends TypeToSchemaExtension
         /** @var ObjectType $type */
         return $this->reflector()->buildSchema(
             $type->name,
-            input: LaravelDataReflector::shouldInlineAsInput($type->name),
+            input: LaravelDataReflector::shouldInlineAsInput($type),
         );
     }
 
@@ -51,7 +51,7 @@ class LaravelDataTypeToSchemaExtension extends TypeToSchemaExtension
      */
     public function reference(ObjectType $type): ?Reference
     {
-        if (LaravelDataReflector::shouldInlineAsInput($type->name)) {
+        if (LaravelDataReflector::shouldInlineAsInput($type)) {
             return null;
         }
 

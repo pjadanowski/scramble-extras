@@ -18,6 +18,7 @@ class NestedInputDataTest extends TestCase
     {
         // The output component is built first, so a transform cached for the
         // response must not leak into the request body (and vice versa).
+        $router->post('api/collection-parent', [ReviewController::class, 'storeCollectionParent']);
         $router->get('api/child', [ReviewController::class, 'showChild']);
         $router->post('api/nested', [ReviewController::class, 'storeNested']);
     }
@@ -58,5 +59,22 @@ class NestedInputDataTest extends TestCase
 
         $this->assertSame('#/components/schemas/ChildInputData', $component['child']['$ref'] ?? null);
         $this->assertSame(['label', 'name'], array_keys($openApi['components']['schemas']['ChildInputData']['properties']));
+    }
+
+    #[Test]
+    public function data_collection_docblock_items_do_not_leak_between_input_and_output(): void
+    {
+        $openApi = $this->generate();
+
+        // The body is built before any response: its input projection must not
+        // end up in the output component or in GET /child.
+        $this->assertSame(['label', 'name'], array_keys($openApi['components']['schemas']['ChildInputData']['properties'] ?? []));
+        $this->assertSame(
+            '#/components/schemas/ChildInputData',
+            $openApi['components']['schemas']['CollectionParentData']['properties']['children']['items']['$ref'] ?? null,
+        );
+
+        $body = $openApi['paths']['/collection-parent']['post']['requestBody']['content']['application/json']['schema'];
+        $this->assertSame(['child_name'], array_keys($body['properties']['children']['items']['properties'] ?? []));
     }
 }
