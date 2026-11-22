@@ -633,7 +633,8 @@ class SchemaAttributeApplier
 
     protected function coerceScalar(OpenApiType $type, string $raw): mixed
     {
-        if ($type instanceof OpenApiIntegerType && is_numeric($raw)) {
+        // ConstrainedNumberType keeps type 'integer' without being an IntegerType.
+        if (($type instanceof OpenApiIntegerType || ($type instanceof OpenApiNumberType && $type->type === 'integer')) && is_numeric($raw)) {
             return (int) $raw;
         }
         if ($type instanceof OpenApiNumberType && is_numeric($raw)) {

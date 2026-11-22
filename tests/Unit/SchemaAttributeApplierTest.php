@@ -333,4 +333,18 @@ class SchemaAttributeApplierTest extends TestCase
         $this->assertArrayNotHasKey('format', $custom->type->toArray());
         $this->assertStringContainsString('d/m/Y', implode(' ', $custom->notes));
     }
+
+    #[Test]
+    public function integer_example_stays_an_integer_after_a_constraint_upgrade(): void
+    {
+        $property = new ReflectionProperty(ValidationFixtures::class, 'positiveWithExample');
+        $applier = new SchemaAttributeApplier;
+
+        $analysis = $applier->analyze($property, new IntegerType);
+        $applier->applyExamplesFromPhpDoc($property, $analysis->type);
+
+        $array = $analysis->type->toArray();
+        $this->assertSame('integer', $array['type']);
+        $this->assertSame(5, $array['examples'][0] ?? $array['example'] ?? null);
+    }
 }

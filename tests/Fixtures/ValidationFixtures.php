@@ -136,4 +136,10 @@ class ValidationFixtures
 
     #[V\DateFormat('d/m/Y')]
     public string $customDate;
+
+    /**
+     * @example 5
+     */
+    #[V\GreaterThan(0)]
+    public int $positiveWithExample;
 }
