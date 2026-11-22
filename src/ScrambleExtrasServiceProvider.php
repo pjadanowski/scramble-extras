@@ -62,6 +62,7 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
 
         Scramble::configure()->withOperationTransformers(function (OperationTransformers $transformers) {
             $transformers->prepend(LaravelDataValidationExceptionExtension::class);
+            $transformers->append(RouteWhereInParameterExtension::class);
 
             // Appended directly rather than via registerExtensions(): Scramble
             // collects OperationExtension classes from Scramble::$extensions

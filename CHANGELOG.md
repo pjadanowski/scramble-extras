@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`whereIn` route constraints** become an enum on the matching path
+  parameter, keeping its type (string or integer) and default.
+  `Route::whereIn('kind', ['a', 'b'])` and backed enum cases are handled;
+  other `where()` patterns are left alone. Ported from
+  [HishamM1/scramble-extras](https://github.com/HishamM1/scramble-extras).
+
 ### Fixed
 - **Schema cache served broken and stale schemas.** With the cache on (the
   default), a warm cache stripped all properties from components and
