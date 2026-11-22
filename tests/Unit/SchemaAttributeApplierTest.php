@@ -2,6 +2,7 @@
 
 namespace PawelJadanowski\ScrambleExtras\Tests\Unit;
 
+use Dedoc\Scramble\Support\Generator\Types\ArrayType;
 use Dedoc\Scramble\Support\Generator\Types\IntegerType;
 use Dedoc\Scramble\Support\Generator\Types\StringType;
 use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
@@ -256,6 +257,54 @@ class SchemaAttributeApplierTest extends TestCase
             $this->assertSame(['Ada Lovelace'], $array['examples']);
         } else {
             $this->assertSame('Ada Lovelace', $array['example'] ?? null);
+        }
+    }
+
+    #[Test]
+    public function min_and_max_digits_on_integer_bound_the_value(): void
+    {
+        $this->assertSame(100, $this->analyze('minDigitsInt', new IntegerType)->type->toArray()['minimum'] ?? null);
+        $this->assertSame(9999, $this->analyze('maxDigitsInt', new IntegerType)->type->toArray()['maximum'] ?? null);
+    }
+
+    #[Test]
+    public function digits_on_integer_bound_the_value(): void
+    {
+        $exact = $this->analyze('digitsInt', new IntegerType)->type->toArray();
+        $this->assertSame([1000, 9999], [$exact['minimum'] ?? null, $exact['maximum'] ?? null]);
+
+        $between = $this->analyze('digitsBetweenInt', new IntegerType)->type->toArray();
+        $this->assertSame([10, 9999], [$between['minimum'] ?? null, $between['maximum'] ?? null]);
+    }
+
+    #[Test]
+    public function min_max_and_size_on_array_bound_the_item_count(): void
+    {
+        $this->assertSame(1, $this->analyze('minItems', new ArrayType)->type->toArray()['minItems'] ?? null);
+        $this->assertSame(5, $this->analyze('maxItems', new ArrayType)->type->toArray()['maxItems'] ?? null);
+
+        $size = $this->analyze('sizeItems', new ArrayType)->type->toArray();
+        $this->assertSame([2, 2], [$size['minItems'] ?? null, $size['maxItems'] ?? null]);
+    }
+
+    #[Test]
+    public function distinct_on_array_sets_unique_items(): void
+    {
+        if (! method_exists(ArrayType::class, 'setUniqueItems')) {
+            $this->markTestSkipped('This dedoc/scramble version has no uniqueItems support.');
+        }
+
+        $this->assertTrue($this->analyze('distinctItems', new ArrayType)->type->toArray()['uniqueItems'] ?? false);
+    }
+
+    #[Test]
+    public function max_on_a_file_is_kilobytes_not_string_length(): void
+    {
+        foreach (['upload', 'fileByAttribute'] as $property) {
+            $analysis = $this->analyze($property, new StringType);
+
+            $this->assertArrayNotHasKey('maxLength', $analysis->type->toArray(), $property);
+            $this->assertStringContainsString('kilobytes', implode(' ', $analysis->notes), $property);
         }
     }
 }

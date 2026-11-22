@@ -32,6 +32,7 @@ class SchemaAttributeApplier
     public function analyze(ReflectionProperty $property, OpenApiType $type): AttributeAnalysis
     {
         $analysis = new AttributeAnalysis($type);
+        $analysis->isFile = $this->isFileProperty($property);
 
         foreach ($property->getAttributes() as $attribute) {
             $this->dispatch($attribute, $analysis);
@@ -100,8 +101,8 @@ class SchemaAttributeApplier
             // --- Digits (numeric strings) ------------------------------------
             $name === V\Digits::class => $this->applyDigits($a, $args[0] ?? null),
             $name === V\DigitsBetween::class => $this->applyDigitsBetween($a, $args[0] ?? null, $args[1] ?? null),
-            $name === V\MinDigits::class => $this->applyMin($a, $args[0] ?? null),
-            $name === V\MaxDigits::class => $this->applyMax($a, $args[0] ?? null),
+            $name === V\MinDigits::class => $this->applyMinDigits($a, $args[0] ?? null),
+            $name === V\MaxDigits::class => $this->applyMaxDigits($a, $args[0] ?? null),
 
             // --- Patterns ---------------------------------------------------
             $name === V\Regex::class => $this->applyPattern($a, $this->trimDelimiters($args[0] ?? null)),
@@ -174,7 +175,7 @@ class SchemaAttributeApplier
             $name === V\CurrentPassword::class => $a->addNote('Must match the authenticated user\'s current password.'),
             $name === V\Exists::class => $a->addNote('Must exist in `'.$this->stringify($args[0] ?? '').'`.'),
             $name === V\Unique::class => $a->addNote('Must be unique in `'.$this->stringify($args[0] ?? '').'`.'),
-            $name === V\Distinct::class => $a->addNote('All array items must be distinct.'),
+            $name === V\Distinct::class => $this->applyDistinct($a),
 
             // --- Dates ------------------------------------------------------
             $name === V\After::class => $a->addNote('Must be after '.$this->stringify($args[0] ?? null).'.'),
@@ -219,7 +220,11 @@ class SchemaAttributeApplier
         $value = $value + 0;
         $type = $a->type;
 
-        if ($type instanceof OpenApiStringType) {
+        if ($a->isFile) {
+            $a->addNote("Minimum file size: {$value} kilobytes.");
+        } elseif ($type instanceof OpenApiArrayType) {
+            $type->setMin((int) $value);
+        } elseif ($type instanceof OpenApiStringType) {
             $type->setMin((int) $value);
         } elseif ($type instanceof OpenApiNumberType) {
             $type->setMin($value);
@@ -235,7 +240,11 @@ class SchemaAttributeApplier
         $value = $value + 0;
         $type = $a->type;
 
-        if ($type instanceof OpenApiStringType) {
+        if ($a->isFile) {
+            $a->addNote("Maximum file size: {$value} kilobytes.");
+        } elseif ($type instanceof OpenApiArrayType) {
+            $type->setMax((int) $value);
+        } elseif ($type instanceof OpenApiStringType) {
             $type->setMax((int) $value);
         } elseif ($type instanceof OpenApiNumberType) {
             $type->setMax($value);
@@ -314,15 +323,13 @@ class SchemaAttributeApplier
             return;
         }
 
-        $count = (int) $count;
-        if ($a->type instanceof OpenApiStringType) {
-            $a->type->setMin($count);
-            $a->type->setMax($count);
-        }
-
-        $this->applyPattern($a, '^\\d{'.$count.'}$');
+        $this->applyDigitsBetween($a, $count, $count);
     }
 
+    /**
+     * On an integer, a digit count bounds the value (3 digits: 100-999); on
+     * a string, it bounds the length and the characters.
+     */
     protected function applyDigitsBetween(AttributeAnalysis $a, mixed $min, mixed $max): void
     {
         if (! is_numeric($min) || ! is_numeric($max)) {
@@ -332,12 +339,87 @@ class SchemaAttributeApplier
         $min = (int) $min;
         $max = (int) $max;
 
+        if ($a->type instanceof OpenApiIntegerType) {
+            $a->type->setMin($this->smallestWithDigits($min));
+            $a->type->setMax($this->largestWithDigits($max));
+
+            return;
+        }
+
         if ($a->type instanceof OpenApiStringType) {
             $a->type->setMin($min);
             $a->type->setMax($max);
         }
 
-        $this->applyPattern($a, '^\\d{'.$min.','.$max.'}$');
+        $this->applyPattern($a, $min === $max ? '^\\d{'.$min.'}$' : '^\\d{'.$min.','.$max.'}$');
+    }
+
+    protected function applyMinDigits(AttributeAnalysis $a, mixed $count): void
+    {
+        if (! is_numeric($count)) {
+            return;
+        }
+
+        if ($a->type instanceof OpenApiIntegerType) {
+            $a->type->setMin($this->smallestWithDigits((int) $count));
+        } elseif ($a->type instanceof OpenApiStringType) {
+            $a->type->setMin((int) $count);
+        }
+    }
+
+    protected function applyMaxDigits(AttributeAnalysis $a, mixed $count): void
+    {
+        if (! is_numeric($count)) {
+            return;
+        }
+
+        if ($a->type instanceof OpenApiIntegerType) {
+            $a->type->setMax($this->largestWithDigits((int) $count));
+        } elseif ($a->type instanceof OpenApiStringType) {
+            $a->type->setMax((int) $count);
+        }
+    }
+
+    protected function smallestWithDigits(int $digits): int
+    {
+        return $digits <= 1 ? 0 : 10 ** ($digits - 1);
+    }
+
+    protected function largestWithDigits(int $digits): int
+    {
+        return 10 ** max($digits, 1) - 1;
+    }
+
+    protected function applyDistinct(AttributeAnalysis $a): void
+    {
+        // setUniqueItems() doesn't exist on older Scramble versions.
+        if ($a->type instanceof OpenApiArrayType && method_exists($a->type, 'setUniqueItems')) {
+            $a->type->setUniqueItems(true);
+
+            return;
+        }
+
+        $a->addNote('All array items must be distinct.');
+    }
+
+    protected function isFileProperty(ReflectionProperty $property): bool
+    {
+        $type = $property->getType();
+        $types = $type instanceof \ReflectionUnionType ? $type->getTypes() : ($type ? [$type] : []);
+
+        foreach ($types as $t) {
+            if ($t instanceof \ReflectionNamedType && is_a($t->getName(), \SplFileInfo::class, true)) {
+                return true;
+            }
+        }
+
+        foreach ([V\File::class, V\Image::class, V\Mimes::class, V\MimeTypes::class, V\Dimensions::class] as $fileRule) {
+            if ($property->getAttributes($fileRule) !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
