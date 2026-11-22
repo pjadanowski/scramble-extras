@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [HishamM1/scramble-extras](https://github.com/HishamM1/scramble-extras).
 
 ### Fixed
+- **Operation ids of PUT/PATCH routes.** Documenting both methods gave them
+  clashing ids, which Scramble replaced with long class-based ones
+  (`…user.update_0` / `…user.update_1`). The first method keeps the plain
+  id, the others get a method suffix (`user.update.patch`). Ported from
+  HishamM1/scramble-extras.
 - **Schema cache served broken and stale schemas.** With the cache on (the
   default), a warm cache stripped all properties from components and
   request bodies, and its entries were effectively never reused. Only
