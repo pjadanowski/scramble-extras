@@ -34,4 +34,9 @@ class ReviewController
     {
         return PlainData::collect([], CursorPaginatedDataCollection::class);
     }
+
+    public function search(SearchData $query): PlainData
+    {
+        return PlainData::from(['firstName' => $query->term]);
+    }
 }
