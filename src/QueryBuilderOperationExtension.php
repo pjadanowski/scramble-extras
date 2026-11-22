@@ -3,6 +3,7 @@
 namespace PawelJadanowski\ScrambleExtras;
 
 use Dedoc\Scramble\Extensions\OperationExtension;
+use Dedoc\Scramble\Infer\Reflector\MethodReflector;
 use Dedoc\Scramble\Infer\Services\FileNameResolver;
 use Dedoc\Scramble\Support\Generator\Operation;
 use Dedoc\Scramble\Support\Generator\Parameter;
@@ -11,9 +12,12 @@ use Dedoc\Scramble\Support\Generator\Types\IntegerType as OpenApiIntegerType;
 use Dedoc\Scramble\Support\Generator\Types\StringType as OpenApiStringType;
 use Dedoc\Scramble\Support\RouteInfo;
 use Illuminate\Database\Eloquent\Model;
+use PhpParser\Node\Stmt\ClassMethod;
 use PhpParser\NodeTraverser;
 use ReflectionClass;
 use ReflectionEnum;
+use ReflectionMethod;
+use Throwable;
 
 /**
  * Walks a controller method's AST for spatie/laravel-query-builder usage and
@@ -29,6 +33,12 @@ use ReflectionEnum;
  */
 class QueryBuilderOperationExtension extends OperationExtension
 {
+    /**
+     * Upper bound on the methods walked per route, so a large call graph
+     * can't make generation crawl.
+     */
+    private const MAX_METHODS = 25;
+
     public function handle(Operation $operation, RouteInfo $routeInfo): void
     {
         $methodNode = $routeInfo->methodNode();
@@ -36,12 +46,8 @@ class QueryBuilderOperationExtension extends OperationExtension
             return;
         }
 
-        $resolver = $this->makeNameResolver($routeInfo);
-
-        $finder = new QueryBuilderUsageVisitor($resolver);
-        $traverser = new NodeTraverser;
-        $traverser->addVisitor($finder);
-        $traverser->traverse($methodNode->stmts);
+        $finder = new QueryBuilderUsageVisitor(null);
+        $this->walk($finder, $methodNode, $this->makeNameResolver($routeInfo), $routeInfo->className(), $routeInfo->methodName());
 
         if (! $finder->found) {
             return;
@@ -69,6 +75,64 @@ class QueryBuilderOperationExtension extends OperationExtension
         }
 
         return false;
+    }
+
+    /**
+     * Walks the route method, then every method it leads to: methods of the
+     * same class it calls, and the code of QueryBuilder subclasses it
+     * instantiates. Framework and query-builder internals aren't walked.
+     */
+    protected function walk(
+        QueryBuilderUsageVisitor $finder,
+        ClassMethod $routeMethod,
+        ?FileNameResolver $routeResolver,
+        ?string $class,
+        ?string $method,
+    ): void {
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor($finder);
+
+        $finder->enterClass($class, $routeResolver);
+        $traverser->traverse($routeMethod->stmts ?? []);
+
+        $visited = $class !== null && $method !== null ? [strtolower($class.'::'.$method) => true] : [];
+
+        while (($next = array_shift($finder->pendingMethods)) !== null && count($visited) < self::MAX_METHODS) {
+            [$nextClass, $nextMethod] = $next;
+            $key = strtolower($nextClass.'::'.$nextMethod);
+
+            if (isset($visited[$key]) || ! method_exists($nextClass, $nextMethod)) {
+                continue;
+            }
+            $visited[$key] = true;
+
+            $declaring = (new ReflectionMethod($nextClass, $nextMethod))->getDeclaringClass()->getName();
+            if (str_starts_with($declaring, 'Spatie\\QueryBuilder\\') || str_starts_with($declaring, 'Illuminate\\')) {
+                continue;
+            }
+
+            try {
+                $node = MethodReflector::make($declaring, $nextMethod)->getAstNode();
+            } catch (Throwable) {
+                continue;
+            }
+
+            if ($node?->stmts === null) {
+                continue;
+            }
+
+            // $this / self / static inside it still mean the class it was
+            // reached through (a subclass may override what it calls).
+            $finder->enterClass($nextClass, $this->nameResolverFor($declaring));
+            $traverser->traverse($node->stmts);
+        }
+    }
+
+    protected function nameResolverFor(?string $class): ?FileNameResolver
+    {
+        $file = $class !== null && class_exists($class) ? (new ReflectionClass($class))->getFileName() : false;
+
+        return $file ? FileNameResolver::createForFile($file) : null;
     }
 
     protected function makeNameResolver(RouteInfo $routeInfo): ?FileNameResolver

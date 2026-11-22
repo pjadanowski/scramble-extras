@@ -4,10 +4,14 @@ namespace PawelJadanowski\ScrambleExtras;
 
 use Dedoc\Scramble\Infer\Services\FileNameResolver;
 use PhpParser\Node;
+use Illuminate\Database\Eloquent\Model;
 use PhpParser\Node\Expr\Array_;
+use PhpParser\Node\Expr\Assign;
 use PhpParser\Node\Expr\ClassConstFetch;
 use PhpParser\Node\Expr\MethodCall;
+use PhpParser\Node\Expr\New_;
 use PhpParser\Node\Expr\StaticCall;
+use PhpParser\Node\Expr\Variable;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Scalar\String_;
 use PhpParser\NodeVisitorAbstract;
@@ -23,6 +27,12 @@ use Spatie\QueryBuilder\QueryBuilder;
  *
  * Doc-comment attributes (`@example`, `@format`, free-text description) on an
  * individual filter entry are picked up and attached to that filter.
+ *
+ * One visitor can walk several methods (see QueryBuilderOperationExtension):
+ * it collects the methods worth following next - `$this->x()` /
+ * `self::x()` / `static::x()` calls and the code of QueryBuilder subclasses
+ * the method instantiates - in $pendingMethods. Lists assigned to a local
+ * variable (`$filters = [...]`) are resolved within the method.
  */
 class QueryBuilderUsageVisitor extends NodeVisitorAbstract
 {
@@ -55,13 +65,55 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
      */
     public array $includeEntries = [];
 
+    /**
+     * Methods to walk next, as [class, method].
+     *
+     * @var array<int, array{0: class-string, 1: string}>
+     */
+    public array $pendingMethods = [];
+
+    /** The class whose method is being walked. */
+    protected ?string $currentClass = null;
+
+    /** @var array<string, Node\Expr> local variable => last assigned value */
+    protected array $variables = [];
+
     public function __construct(protected ?FileNameResolver $nameResolver) {}
+
+    /**
+     * Walk a method of $class next: names resolve against that class's file.
+     */
+    public function enterClass(?string $class, ?FileNameResolver $nameResolver): void
+    {
+        $this->currentClass = $class;
+        $this->nameResolver = $nameResolver;
+    }
+
+    public function beforeTraverse(array $nodes)
+    {
+        $this->variables = [];
+
+        return null;
+    }
 
     public function enterNode(Node $node)
     {
+        if ($node instanceof Assign && $node->var instanceof Variable && is_string($node->var->name)) {
+            $this->variables[$node->var->name] = $node->expr;
+        }
+
         if ($node instanceof StaticCall && $this->isQueryBuilderFor($node)) {
             $this->found = true;
-            $this->modelClass = $this->extractClassConst($node->args[0]->value ?? null);
+            $this->modelClass ??= $this->extractModelClass($node->args[0]->value ?? null);
+        }
+
+        if ($node instanceof StaticCall || $node instanceof New_) {
+            $this->collectFollowUp($node);
+        }
+
+        if ($node instanceof MethodCall && $node->var instanceof Variable && $node->var->name === 'this'
+            && $node->name instanceof Identifier && $this->currentClass !== null) {
+            $this->pendingMethods[] = [$this->currentClass, $node->name->name];
         }
 
         if (! $node instanceof MethodCall) {
@@ -97,6 +149,51 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
         return null;
     }
 
+    /**
+     * `self::x()` / `static::x()` / `new static` continue in the current
+     * class; `new
+     * SomeQuery` / `SomeQuery::make()` on a QueryBuilder subclass mean that
+     * subclass configures the query, so its constructor / that method are
+     * walked. `parent::__construct(User::query())` in such a subclass names
+     * the model.
+     */
+    protected function collectFollowUp(StaticCall|New_ $node): void
+    {
+        $method = $node instanceof New_
+            ? '__construct'
+            : ($node->name instanceof Identifier ? $node->name->name : null);
+
+        if ($method === null || ! $node->class instanceof Node\Name) {
+            return;
+        }
+
+        $keyword = strtolower($node->class->toString());
+
+        if (in_array($keyword, ['self', 'static'], true)) {
+            if ($this->currentClass !== null) {
+                $this->pendingMethods[] = [$this->currentClass, $method];
+            }
+
+            return;
+        }
+
+        if ($keyword === 'parent') {
+            if ($method === '__construct' && $this->currentClass !== null && is_a($this->currentClass, QueryBuilder::class, true)) {
+                $this->found = true;
+                $this->modelClass ??= $this->extractModelClass($node->args[0]->value ?? null);
+            }
+
+            return;
+        }
+
+        $class = $this->resolveClassName($node->class);
+
+        if ($method !== 'for' && $class !== QueryBuilder::class && class_exists($class) && is_subclass_of($class, QueryBuilder::class)) {
+            $this->found = true;
+            $this->pendingMethods[] = [$class, $method];
+        }
+    }
+
     protected function isQueryBuilderFor(StaticCall $node): bool
     {
         $method = $node->name instanceof Identifier ? $node->name->name : null;
@@ -115,14 +212,14 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
         $result = [];
 
         foreach ($node->args as $arg) {
-            $expr = $arg->value;
+            $expr = $this->resolveVariable($arg->value);
 
             if ($expr instanceof Array_) {
                 foreach ($expr->items as $item) {
                     if (! $item) {
                         continue;
                     }
-                    $entry = $this->buildFilterEntry($item->value, $item);
+                    $entry = $this->buildFilterEntry($this->resolveVariable($item->value), $item);
                     if ($entry !== null) {
                         $result[] = $entry;
                     }
@@ -253,18 +350,32 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
                 continue;
             }
 
-            if ($arg->value instanceof Array_) {
-                foreach ($arg->value->items as $item) {
+            $value = $this->resolveVariable($arg->value);
+
+            if ($value instanceof Array_) {
+                foreach ($value->items as $item) {
                     if ($item) {
-                        $items[] = $item->value;
+                        $items[] = $this->resolveVariable($item->value);
                     }
                 }
             } else {
-                $items[] = $arg->value;
+                $items[] = $value;
             }
         }
 
         return $items;
+    }
+
+    /**
+     * The value last assigned to a local variable earlier in the method.
+     */
+    protected function resolveVariable(Node $expr): Node
+    {
+        if ($expr instanceof Variable && is_string($expr->name) && isset($this->variables[$expr->name])) {
+            return $this->variables[$expr->name];
+        }
+
+        return $expr;
     }
 
     protected function chainRoot(?Node $expr): ?Node
@@ -330,7 +441,7 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
         $result = [];
 
         foreach ($node->args as $arg) {
-            $expr = $arg->value;
+            $expr = $this->resolveVariable($arg->value);
 
             if ($expr instanceof Array_) {
                 foreach ($expr->items as $item) {
@@ -344,6 +455,32 @@ class QueryBuilderUsageVisitor extends NodeVisitorAbstract
         }
 
         return $result;
+    }
+
+    /**
+     * The model of `QueryBuilder::for(User::class)`, `for(User::query())`
+     * or `for(User::where(...))`.
+     */
+    protected function extractModelClass(?Node $node): ?string
+    {
+        if ($node instanceof Variable) {
+            $node = $this->resolveVariable($node);
+        }
+
+        $class = $this->extractClassConst($node);
+        if ($class !== null) {
+            return $class;
+        }
+
+        // User::query() / User::where(...)->...: only a model is a model.
+        $root = $this->chainRoot($node);
+        if ($root instanceof StaticCall && $root->class instanceof Node\Name) {
+            $class = $this->resolveClassName($root->class);
+
+            return class_exists($class) && is_subclass_of($class, Model::class) ? $class : null;
+        }
+
+        return null;
     }
 
     protected function extractClassConst(?Node $node): ?string

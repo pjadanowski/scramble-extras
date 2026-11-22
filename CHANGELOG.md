@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Query builder configuration outside the route method** is documented:
+  lists held in local variables (`->allowedFilters($filters)`, including
+  `...$sorts`), query builders set up in methods the route calls
+  (`$this->query()`, `self::` / `static::`), and `QueryBuilder` subclasses
+  that configure themselves (`new UserListQuery`, `UserListQuery::make()`),
+  including their model from `parent::__construct(User::query())` for enum
+  casts. Idea from HishamM1/scramble-extras.
 - **`whereIn` route constraints** become an enum on the matching path
   parameter, keeping its type (string or integer) and default.
   `Route::whereIn('kind', ['a', 'b'])` and backed enum cases are handled;
