@@ -2,6 +2,9 @@
 
 namespace PawelJadanowski\ScrambleExtras\Tests\Fixtures;
 
+use Spatie\LaravelData\CursorPaginatedDataCollection;
+use Spatie\LaravelData\PaginatedDataCollection;
+
 /**
  * Routes for the regression tests added after the 0.5 code review.
  */
@@ -20,5 +23,15 @@ class ReviewController
     public function storePlain(PlainData $data): PlainData
     {
         return $data;
+    }
+
+    public function paginated()
+    {
+        return PlainData::collect([], PaginatedDataCollection::class);
+    }
+
+    public function cursorPaginated()
+    {
+        return PlainData::collect([], CursorPaginatedDataCollection::class);
     }
 }

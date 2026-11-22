@@ -8,7 +8,6 @@ use Dedoc\Scramble\Support\Generator\Schema;
 use Dedoc\Scramble\Support\Generator\Types\ArrayType as OpenApiArrayType;
 use Dedoc\Scramble\Support\Generator\Types\BooleanType as OpenApiBooleanType;
 use Dedoc\Scramble\Support\Generator\Types\IntegerType as OpenApiIntegerType;
-use Dedoc\Scramble\Support\Generator\Types\NullType as OpenApiNullType;
 use Dedoc\Scramble\Support\Generator\Types\ObjectType as OpenApiObjectType;
 use Dedoc\Scramble\Support\Generator\Types\StringType as OpenApiStringType;
 use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
@@ -17,6 +16,12 @@ use Dedoc\Scramble\Support\Type\ObjectType as ScrambleObjectType;
 use Dedoc\Scramble\Support\Type\Type;
 use Spatie\LaravelData\PaginatedDataCollection;
 
+/**
+ * Renders `Spatie\LaravelData\PaginatedDataCollection<T>` as the envelope
+ * spatie/laravel-data returns for it: `data`, `links` (the paginator's link
+ * list) and `meta` (page numbers and URLs). Note this is not the
+ * JsonResource envelope: `links` is a list, and the page URLs live in `meta`.
+ */
 class PaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
 {
     public function shouldHandle(Type $type): bool
@@ -86,41 +91,50 @@ class PaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
         return $this->openApiTransformer->transform(new ScrambleObjectType($itemClass));
     }
 
-    protected function linksObject(): OpenApiObjectType
+    /**
+     * The paginator's link collection, as returned by
+     * LengthAwarePaginator::linkCollection(): a list of page links.
+     */
+    protected function linksObject(): OpenApiArrayType
     {
-        $object = new OpenApiObjectType;
-
-        $nullableUrl = (new OpenApiStringType)->format('uri')->nullable(true);
-        $object
-            ->addProperty('first', $nullableUrl)
-            ->addProperty('last', $nullableUrl)
-            ->addProperty('prev', $nullableUrl)
-            ->addProperty('next', $nullableUrl);
-
-        return $object;
-    }
-
-    protected function metaObject(): OpenApiObjectType
-    {
-        $object = new OpenApiObjectType;
-
-        $object
-            ->addProperty('current_page', new OpenApiIntegerType)
-            ->addProperty('from', (new OpenApiIntegerType)->nullable(true))
-            ->addProperty('last_page', new OpenApiIntegerType)
-            ->addProperty('path', (new OpenApiStringType)->format('uri'))
-            ->addProperty('per_page', new OpenApiIntegerType)
-            ->addProperty('to', (new OpenApiIntegerType)->nullable(true))
-            ->addProperty('total', new OpenApiIntegerType);
-
-        $linkObject = new OpenApiObjectType;
-        $linkObject
+        $link = new OpenApiObjectType;
+        $link
             ->addProperty('url', (new OpenApiStringType)->format('uri')->nullable(true))
             ->addProperty('label', new OpenApiStringType)
-            ->addProperty('active', new OpenApiBooleanType);
+            // Added to linkCollection() in newer Laravel versions.
+            ->addProperty('page', (new OpenApiIntegerType)->nullable(true))
+            ->addProperty('active', new OpenApiBooleanType)
+            ->setRequired(['url', 'label', 'active']);
 
-        $object->addProperty('links', (new OpenApiArrayType)->setItems($linkObject));
+        return (new OpenApiArrayType)->setItems($link);
+    }
 
-        return $object;
+    /**
+     * Mirrors TransformedDataCollectableResolver::resolveLengthAwarePaginatorLinksAndMeta().
+     */
+    protected function metaObject(): OpenApiObjectType
+    {
+        $url = fn () => (new OpenApiStringType)->format('uri');
+
+        $properties = [
+            'current_page' => new OpenApiIntegerType,
+            'first_page_url' => $url(),
+            'from' => (new OpenApiIntegerType)->nullable(true),
+            'last_page' => new OpenApiIntegerType,
+            'last_page_url' => $url(),
+            'next_page_url' => $url()->nullable(true),
+            'path' => $url(),
+            'per_page' => new OpenApiIntegerType,
+            'prev_page_url' => $url()->nullable(true),
+            'to' => (new OpenApiIntegerType)->nullable(true),
+            'total' => new OpenApiIntegerType,
+        ];
+
+        $object = new OpenApiObjectType;
+        foreach ($properties as $name => $type) {
+            $object->addProperty($name, $type);
+        }
+
+        return $object->setRequired(array_keys($properties));
     }
 }

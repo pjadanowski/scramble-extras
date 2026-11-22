@@ -17,8 +17,9 @@ use Spatie\LaravelData\CursorPaginatedDataCollection;
 
 /**
  * Renders `Spatie\LaravelData\CursorPaginatedDataCollection<T>` as the
- * standard Laravel cursor-paginator envelope (data + path + per_page +
- * next_cursor / prev_cursor + page urls).
+ * envelope spatie/laravel-data returns for it: `data`, an always-empty
+ * `links` list, and `meta` with the cursors and page URLs (mirrors
+ * TransformedDataCollectableResolver::resolveCursorPaginatorLinksAndMeta()).
  */
 class CursorPaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
 {
@@ -33,16 +34,26 @@ class CursorPaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExt
     {
         $itemSchema = $this->getItemSchema($type);
 
+        $meta = new OpenApiObjectType;
+        $metaProperties = [
+            'path' => (new OpenApiStringType)->format('uri'),
+            'per_page' => new OpenApiIntegerType,
+            'next_cursor' => (new OpenApiStringType)->nullable(true),
+            'next_page_url' => (new OpenApiStringType)->format('uri')->nullable(true),
+            'prev_cursor' => (new OpenApiStringType)->nullable(true),
+            'prev_page_url' => (new OpenApiStringType)->format('uri')->nullable(true),
+        ];
+        foreach ($metaProperties as $name => $propertyType) {
+            $meta->addProperty($name, $propertyType);
+        }
+        $meta->setRequired(array_keys($metaProperties));
+
         $object = new OpenApiObjectType;
         $object
             ->addProperty('data', (new OpenApiArrayType)->setItems($itemSchema))
-            ->addProperty('path', (new OpenApiStringType)->format('uri'))
-            ->addProperty('per_page', new OpenApiIntegerType)
-            ->addProperty('next_cursor', (new OpenApiStringType)->nullable(true))
-            ->addProperty('next_page_url', (new OpenApiStringType)->format('uri')->nullable(true))
-            ->addProperty('prev_cursor', (new OpenApiStringType)->nullable(true))
-            ->addProperty('prev_page_url', (new OpenApiStringType)->format('uri')->nullable(true))
-            ->setRequired(['data', 'path', 'per_page']);
+            ->addProperty('links', (new OpenApiArrayType)->setDescription('Always empty for cursor pagination.'))
+            ->addProperty('meta', $meta)
+            ->setRequired(['data', 'links', 'meta']);
 
         return $object;
     }

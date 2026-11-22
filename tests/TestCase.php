@@ -6,6 +6,7 @@ use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\ScrambleServiceProvider;
 use PawelJadanowski\ScrambleExtras\ScrambleExtrasServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Spatie\LaravelData\LaravelDataServiceProvider;
 
 abstract class TestCase extends Orchestra
 {
@@ -24,6 +25,7 @@ abstract class TestCase extends Orchestra
     protected function getPackageProviders($app): array
     {
         return [
+            LaravelDataServiceProvider::class,
             ScrambleServiceProvider::class,
             ScrambleExtrasServiceProvider::class,
         ];
