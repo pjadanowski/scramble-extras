@@ -142,4 +142,13 @@ class ValidationFixtures
      */
     #[V\GreaterThan(0)]
     public int $positiveWithExample;
+
+    #[V\DateFormat('d.m.Y')]
+    public string $customDateOnDateTime;
+
+    #[V\DateFormat('H:i:s')]
+    public string $timeWithoutOffset;
+
+    #[V\MultipleOf(5), V\Digits(3)]
+    public int $multipleOfThenDigits;
 }

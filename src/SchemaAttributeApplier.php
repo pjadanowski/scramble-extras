@@ -175,7 +175,9 @@ class SchemaAttributeApplier
             $name === V\CurrentPassword::class => $a->addNote('Must match the authenticated user\'s current password.'),
             $name === V\Exists::class => $a->addNote('Must exist in `'.$this->stringify($args[0] ?? '').'`.'),
             $name === V\Unique::class => $a->addNote('Must be unique in `'.$this->stringify($args[0] ?? '').'`.'),
-            $name === V\Distinct::class => $this->applyDistinct($a),
+            // Not uniqueItems: on a non-wildcard property Laravel's `distinct`
+            // doesn't enforce unique items, and it compares loosely.
+            $name === V\Distinct::class => $a->addNote('All array items must be distinct.'),
 
             // --- Dates ------------------------------------------------------
             $name === V\After::class => $a->addNote('Must be after '.$this->stringify($args[0] ?? null).'.'),
@@ -210,7 +212,7 @@ class SchemaAttributeApplier
         'Y-m-d\\TH:i:s.vP' => 'date-time',
         'Y-m-d\\TH:i:s.uP' => 'date-time',
         'c' => 'date-time',
-        'H:i:s' => 'time',
+        // No 'H:i:s' => 'time': RFC 3339 `time` requires a UTC offset.
     ];
 
     /**
@@ -229,6 +231,9 @@ class SchemaAttributeApplier
             return;
         }
 
+        // A format the base type carries (Scramble documents Carbon as
+        // date-time) would contradict the rule.
+        $a->type->format('');
         $a->addNote('Date format: '.implode(' or ', array_map(fn ($f) => "`$f`", $formats)).' (PHP date format).');
     }
 
@@ -360,7 +365,7 @@ class SchemaAttributeApplier
         $min = (int) $min;
         $max = (int) $max;
 
-        if ($a->type instanceof OpenApiIntegerType) {
+        if ($this->isInteger($a->type)) {
             $a->type->setMin($this->smallestWithDigits($min));
             $a->type->setMax($this->largestWithDigits($max));
 
@@ -381,7 +386,7 @@ class SchemaAttributeApplier
             return;
         }
 
-        if ($a->type instanceof OpenApiIntegerType) {
+        if ($this->isInteger($a->type)) {
             $a->type->setMin($this->smallestWithDigits((int) $count));
         } elseif ($a->type instanceof OpenApiStringType) {
             $a->type->setMin((int) $count);
@@ -394,11 +399,21 @@ class SchemaAttributeApplier
             return;
         }
 
-        if ($a->type instanceof OpenApiIntegerType) {
+        if ($this->isInteger($a->type)) {
             $a->type->setMax($this->largestWithDigits((int) $count));
         } elseif ($a->type instanceof OpenApiStringType) {
             $a->type->setMax((int) $count);
         }
+    }
+
+    /**
+     * An int property stays `type: integer` after #[GreaterThan]/#[MultipleOf]
+     * upgrade it to ConstrainedNumberType, which is not an IntegerType.
+     */
+    protected function isInteger(OpenApiType $type): bool
+    {
+        return $type instanceof OpenApiIntegerType
+            || ($type instanceof OpenApiNumberType && $type->type === 'integer');
     }
 
     protected function smallestWithDigits(int $digits): int
@@ -409,18 +424,6 @@ class SchemaAttributeApplier
     protected function largestWithDigits(int $digits): int
     {
         return 10 ** max($digits, 1) - 1;
-    }
-
-    protected function applyDistinct(AttributeAnalysis $a): void
-    {
-        // setUniqueItems() doesn't exist on older Scramble versions.
-        if ($a->type instanceof OpenApiArrayType && method_exists($a->type, 'setUniqueItems')) {
-            $a->type->setUniqueItems(true);
-
-            return;
-        }
-
-        $a->addNote('All array items must be distinct.');
     }
 
     protected function isFileProperty(ReflectionProperty $property): bool
@@ -633,8 +636,7 @@ class SchemaAttributeApplier
 
     protected function coerceScalar(OpenApiType $type, string $raw): mixed
     {
-        // ConstrainedNumberType keeps type 'integer' without being an IntegerType.
-        if (($type instanceof OpenApiIntegerType || ($type instanceof OpenApiNumberType && $type->type === 'integer')) && is_numeric($raw)) {
+        if ($this->isInteger($type) && is_numeric($raw)) {
             return (int) $raw;
         }
         if ($type instanceof OpenApiNumberType && is_numeric($raw)) {

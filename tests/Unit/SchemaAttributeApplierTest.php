@@ -288,13 +288,14 @@ class SchemaAttributeApplierTest extends TestCase
     }
 
     #[Test]
-    public function distinct_on_array_sets_unique_items(): void
+    public function distinct_is_a_note_not_unique_items(): void
     {
-        if (! method_exists(ArrayType::class, 'setUniqueItems')) {
-            $this->markTestSkipped('This dedoc/scramble version has no uniqueItems support.');
-        }
+        // On a non-wildcard property, Laravel's `distinct` doesn't enforce
+        // unique items, so it must not be documented as uniqueItems.
+        $analysis = $this->analyze('distinctItems', new ArrayType);
 
-        $this->assertTrue($this->analyze('distinctItems', new ArrayType)->type->toArray()['uniqueItems'] ?? false);
+        $this->assertArrayNotHasKey('uniqueItems', $analysis->type->toArray());
+        $this->assertContains('All array items must be distinct.', $analysis->notes);
     }
 
     #[Test]
@@ -346,5 +347,28 @@ class SchemaAttributeApplierTest extends TestCase
         $array = $analysis->type->toArray();
         $this->assertSame('integer', $array['type']);
         $this->assertSame(5, $array['examples'][0] ?? $array['example'] ?? null);
+    }
+
+    #[Test]
+    public function unmapped_date_format_removes_an_existing_format(): void
+    {
+        // Scramble documents Carbon as `format: date-time`.
+        $type = (new StringType)->format('date-time');
+
+        $this->assertArrayNotHasKey('format', $this->analyze('customDateOnDateTime', $type)->type->toArray());
+    }
+
+    #[Test]
+    public function time_without_offset_is_not_the_rfc3339_time_format(): void
+    {
+        $this->assertArrayNotHasKey('format', $this->analyze('timeWithoutOffset', new StringType)->type->toArray());
+    }
+
+    #[Test]
+    public function digit_bounds_apply_after_a_constraint_upgrade(): void
+    {
+        $array = $this->analyze('multipleOfThenDigits', new IntegerType)->type->toArray();
+
+        $this->assertSame([100, 999, 5], [$array['minimum'] ?? null, $array['maximum'] ?? null, $array['multipleOf'] ?? null]);
     }
 }
