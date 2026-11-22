@@ -17,6 +17,8 @@ use Dedoc\Scramble\Support\Generator\Types\UnknownType as OpenApiUnknownType;
 use Dedoc\Scramble\Support\Generator\TypeTransformer;
 use Dedoc\Scramble\Support\PhpDoc;
 use Dedoc\Scramble\Support\Type\ObjectType as ScrambleObjectType;
+use PHPStan\PhpDocParser\Ast\PhpDoc\PhpDocTextNode;
+use PHPStan\PhpDocParser\Ast\Type\TypeNode;
 use ReflectionClass;
 use ReflectionNamedType;
 use ReflectionProperty;
@@ -95,16 +97,12 @@ class LaravelDataReflector
 
         $mappedNames = $this->mappedNames($dataClass, $input);
 
-        $nameResolver = $reflection->getFileName()
-            ? FileNameResolver::createForFile($reflection->getFileName())
-            : null;
-
         foreach ($reflection->getProperties(ReflectionProperty::IS_PUBLIC) as $property) {
             if ($property->isStatic()) {
                 continue;
             }
 
-            $info = $this->describeProperty($property, $input, $mappedNames[$property->getName()] ?? $property->getName(), $nameResolver);
+            $info = $this->describeProperty($property, $input, $mappedNames[$property->getName()] ?? $property->getName());
             if ($info === null) {
                 continue;
             }
@@ -291,7 +289,7 @@ class LaravelDataReflector
     /**
      * @return array{name: string, type: OpenApiType, required: bool}|null
      */
-    protected function describeProperty(ReflectionProperty $property, bool $input, string $name, ?FileNameResolver $nameResolver): ?array
+    protected function describeProperty(ReflectionProperty $property, bool $input, string $name): ?array
     {
         $isHidden = $this->hasAttribute($property, Hidden::class);
         $isComputed = $this->hasAttribute($property, Computed::class);
@@ -338,8 +336,7 @@ class LaravelDataReflector
                 $this->resolveClassType($collectionOf),
             );
         } else {
-            $docVarType = $this->extractDocVarType($property);
-            $openApiType = $this->resolveType($effectiveTypes, $docVarType, $nameResolver);
+            $openApiType = $this->resolveType($effectiveTypes, $this->extractDocType($property));
         }
 
         if ($isNullable) {
@@ -435,10 +432,10 @@ class LaravelDataReflector
     /**
      * @param  ReflectionNamedType[]  $types
      */
-    protected function resolveType(array $types, ?string $docVarType, ?FileNameResolver $nameResolver): OpenApiType
+    protected function resolveType(array $types, ?TypeNode $docType): OpenApiType
     {
-        if ($docVarType !== null) {
-            $resolved = $this->resolveDocType($docVarType, $nameResolver);
+        if ($docType !== null) {
+            $resolved = $this->resolveDocType($docType);
             if (! $resolved instanceof OpenApiUnknownType) {
                 return $resolved;
             }
@@ -462,16 +459,9 @@ class LaravelDataReflector
         };
     }
 
-    protected function resolveDocType(string $docType, ?FileNameResolver $nameResolver): OpenApiType
+    protected function resolveDocType(TypeNode $docType): OpenApiType
     {
-        $phpDocNode = PhpDoc::parse("/** @var $docType */", $nameResolver);
-
-        $varTags = $phpDocNode->getVarTagValues();
-        if (empty($varTags)) {
-            return new OpenApiUnknownType;
-        }
-
-        $scrambleType = PhpDocTypeHelper::toType($varTags[0]->type);
+        $scrambleType = PhpDocTypeHelper::toType($docType);
         $this->collectClasses($scrambleType);
 
         return $this->openApiTransformer->transform($scrambleType);
@@ -488,42 +478,42 @@ class LaravelDataReflector
         return $this->openApiTransformer->transform(new ScrambleObjectType($className));
     }
 
-    protected function extractDocVarType(ReflectionProperty $property): ?string
+    /**
+     * The property's PHPDoc type: its own `@var`, or for a promoted property
+     * the constructor's `@param`. Parsed with a real PHPDoc parser (generics
+     * with spaces, multi-line array shapes), with class names resolved
+     * against the file of the class that declares the property.
+     */
+    protected function extractDocType(ReflectionProperty $property): ?TypeNode
     {
-        $doc = $property->getDocComment() ?: '';
+        $declaringClass = $property->getDeclaringClass();
+        $nameResolver = $this->nameResolverFor($declaringClass);
 
-        if ($doc !== '' && preg_match('/@var\s+([^\n*]+)/', $doc, $m)) {
-            return trim($m[1]);
+        if ($doc = $property->getDocComment()) {
+            $varTags = PhpDoc::parse($doc, $nameResolver)->getVarTagValues();
+            if ($varTags !== []) {
+                return $varTags[0]->type;
+            }
         }
 
-        if ($property->isPromoted()) {
-            $paramType = $this->findPromotedParamType($property);
-            if ($paramType !== null) {
-                return $paramType;
+        if (! $property->isPromoted() || ! ($constructorDoc = $declaringClass->getConstructor()?->getDocComment())) {
+            return null;
+        }
+
+        foreach (PhpDoc::parse($constructorDoc, $nameResolver)->getParamTagValues() as $paramTag) {
+            if ($paramTag->parameterName === '$'.$property->getName()) {
+                return $paramTag->type;
             }
         }
 
         return null;
     }
 
-    protected function findPromotedParamType(ReflectionProperty $property): ?string
+    protected function nameResolverFor(ReflectionClass $class): ?FileNameResolver
     {
-        $constructor = $property->getDeclaringClass()->getConstructor();
-        if (! $constructor) {
-            return null;
-        }
+        $file = $class->getFileName();
 
-        $constructorDoc = $constructor->getDocComment() ?: '';
-        if ($constructorDoc === '') {
-            return null;
-        }
-
-        $name = $property->getName();
-        if (preg_match('/@param\s+(\S+)\s+\$'.preg_quote($name, '/').'\b/', $constructorDoc, $m)) {
-            return trim($m[1]);
-        }
-
-        return null;
+        return $file ? FileNameResolver::createForFile($file) : null;
     }
 
     protected function extractDescription(ReflectionProperty $property): string
@@ -533,17 +523,17 @@ class LaravelDataReflector
             return '';
         }
 
-        $lines = preg_split('/\r?\n/', $doc) ?: [];
-        $description = [];
-        foreach ($lines as $line) {
-            $line = trim($line, " \t/*");
-            if ($line === '' || str_starts_with($line, '@')) {
-                continue;
+        // Only the free text before the tags: a multi-line tag (an array
+        // shape, a long @example) continues on lines that don't start with `@`.
+        $text = [];
+        foreach (PhpDoc::parse($doc)->children as $child) {
+            if (! $child instanceof PhpDocTextNode) {
+                break;
             }
-            $description[] = $line;
+            $text[] = trim((string) $child);
         }
 
-        return trim(implode(' ', $description));
+        return trim(preg_replace('/\s+/', ' ', implode(' ', $text)) ?? '');
     }
 
     /**

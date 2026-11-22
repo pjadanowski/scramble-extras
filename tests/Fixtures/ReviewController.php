@@ -39,4 +39,9 @@ class ReviewController
     {
         return PlainData::from(['firstName' => $query->term]);
     }
+
+    public function docTyped(): DocTypedData
+    {
+        return DocTypedData::from([]);
+    }
 }
