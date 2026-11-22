@@ -28,7 +28,7 @@
         "spatie/laravel-data": "^4.0"
     },
     "require-dev": {
-        "orchestra/testbench": "^10.4",
+        "orchestra/testbench": "^10.4 || ^11.0",
         "phpunit/phpunit": "^11.5 || ^12.0",
         "spatie/laravel-query-builder": "^6.0 || ^7.0"
     },
