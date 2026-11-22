@@ -432,14 +432,15 @@ class LaravelDataReflector
             $openApiType->setDescription($description);
         }
 
-        if (! $input && $isComputed) {
-            // Computed properties are produced server-side on every output, so always required.
-            $required = true;
+        if (! $input) {
+            // laravel-data writes every property except Optional and Lazy ones
+            // (null for a nullable one, the default for a defaulted one).
+            // Validation attributes like #[Sometimes] only affect input.
+            $required = ! $isOptional && ! $isLazy;
         } elseif ($analysis->forceRequired !== null) {
             $required = $analysis->forceRequired;
         } else {
             $required = ! $isOptional
-                && ! $isLazy
                 && ! $isNullable
                 && ! $this->promotedHasDefault($property);
         }
