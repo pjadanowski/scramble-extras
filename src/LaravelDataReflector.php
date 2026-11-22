@@ -522,18 +522,62 @@ class LaravelDataReflector
             return new OpenApiUnknownType;
         }
 
-        $primary = $types[0];
-        $name = $primary->getName();
+        if (count($types) > 1) {
+            return $this->resolveUnionType($types);
+        }
+
+        $name = $types[0]->getName();
 
         return match ($name) {
             'int' => new OpenApiIntegerType,
             'string' => new OpenApiStringType,
-            'bool' => new OpenApiBooleanType,
+            'bool', 'true', 'false' => new OpenApiBooleanType,
             'float' => new OpenApiNumberType,
             'array' => new OpenApiArrayType,
             'mixed' => new OpenApiUnknownType,
             default => $this->resolveClassType($name),
         };
+    }
+
+    /**
+     * A native union (`int|string`, `int|FooData`) documents every member;
+     * nullability is applied separately.
+     *
+     * @param  ReflectionNamedType[]  $types
+     */
+    protected function resolveUnionType(array $types): OpenApiType
+    {
+        $members = [];
+
+        foreach ($types as $type) {
+            $member = match ($type->getName()) {
+                'int' => new \Dedoc\Scramble\Support\Type\IntegerType,
+                'string' => new \Dedoc\Scramble\Support\Type\StringType,
+                'bool', 'true', 'false' => new \Dedoc\Scramble\Support\Type\BooleanType,
+                'float' => new \Dedoc\Scramble\Support\Type\FloatType,
+                'array' => new \Dedoc\Scramble\Support\Type\ArrayType,
+                'null', 'mixed' => null,
+                default => class_exists($type->getName()) || enum_exists($type->getName())
+                    ? new ScrambleObjectType($type->getName())
+                    : null,
+            };
+
+            if ($member instanceof ScrambleObjectType) {
+                $this->referencedClasses[] = $member->name;
+            }
+
+            if ($member !== null) {
+                $members[] = $member;
+            }
+        }
+
+        if ($members === []) {
+            return new OpenApiUnknownType;
+        }
+
+        $union = count($members) === 1 ? $members[0] : new \Dedoc\Scramble\Support\Type\Union($members);
+
+        return $this->openApiTransformer->transform($this->bypassTransformCacheForInput($union));
     }
 
     protected function resolveDocType(TypeNode $docType): OpenApiType

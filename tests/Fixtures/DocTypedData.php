@@ -21,5 +21,7 @@ class DocTypedData extends Data
     public function __construct(
         public array $ids,
         public array $people,
+        public int|string $identifier = 0,
+        public int|PlainData $ownerOrId = 0,
     ) {}
 }

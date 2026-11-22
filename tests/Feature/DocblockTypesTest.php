@@ -48,4 +48,18 @@ class DocblockTypesTest extends TestCase
         // The shape's continuation lines are part of the tag, not a description.
         $this->assertArrayNotHasKey('description', $location);
     }
+
+    #[Test]
+    public function native_union_types_document_every_member(): void
+    {
+        $properties = $this->properties();
+
+        $identifier = json_encode($properties['identifier']);
+        $this->assertStringContainsString('integer', $identifier);
+        $this->assertStringContainsString('string', $identifier);
+
+        $ownerOrId = json_encode($properties['ownerOrId'], JSON_UNESCAPED_SLASHES);
+        $this->assertStringContainsString('integer', $ownerOrId);
+        $this->assertStringContainsString('#/components/schemas/PlainData', $ownerOrId);
+    }
 }
