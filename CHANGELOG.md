@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [HishamM1/scramble-extras](https://github.com/HishamM1/scramble-extras).
 
 ### Fixed
+- **`$data->toResponse($request)`** (also on collections) was documented as
+  a string response. It now documents the Data or collection schema and
+  keeps a changed status code. Ported from HishamM1/scramble-extras.
 - **Operation ids of PUT/PATCH routes.** Documenting both methods gave them
   clashing ids, which Scramble replaced with long class-based ones
   (`…user.update_0` / `…user.update_1`). The first method keeps the plain

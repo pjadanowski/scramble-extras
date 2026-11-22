@@ -5,6 +5,8 @@ namespace PawelJadanowski\ScrambleExtras;
 use Dedoc\Scramble\Extensions\TypeToSchemaExtension;
 use Dedoc\Scramble\Support\Generator\ClassBasedReference;
 use Dedoc\Scramble\Support\Generator\Reference;
+use Dedoc\Scramble\Support\Generator\Response;
+use Dedoc\Scramble\Support\Generator\Schema;
 use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
 use Dedoc\Scramble\Support\Type\ObjectType;
 use Dedoc\Scramble\Support\Type\Type;
@@ -56,6 +58,23 @@ class LaravelDataTypeToSchemaExtension extends TypeToSchemaExtension
         }
 
         return ClassBasedReference::create('schemas', $type->name, $this->components);
+    }
+
+    /**
+     * Data is Responsable, and Scramble's Responsable handling documents it
+     * through the inferred return type of toResponse(). That type is
+     * JsonResponse<static> (LaravelDataResponseMethodReturnTypeExtension),
+     * whose body is the Data again, so the two would hand each other the
+     * same type forever. Answer the response here instead.
+     */
+    public function toResponse(Type $type): ?Response
+    {
+        /** @var ObjectType $type */
+        $schema = $this->openApiTransformer->transform($type);
+
+        return Response::make(200)
+            ->setContent('application/json', Schema::fromType($schema))
+            ->setDescription('`'.($schema instanceof Reference ? $schema->getUniqueName() : class_basename($type->name)).'`');
     }
 
     protected function reflector(): LaravelDataReflector

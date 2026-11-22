@@ -52,6 +52,7 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             CursorPaginatedDataCollectionTypeToSchemaExtension::class,
             DataCollectionTypeToSchemaExtension::class,
             LaravelDataReturnTypeExtension::class,
+            LaravelDataResponseMethodReturnTypeExtension::class,
         ];
 
         Scramble::registerExtensions($extensions);
