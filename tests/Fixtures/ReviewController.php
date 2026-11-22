@@ -71,4 +71,14 @@ class ReviewController
 
         return [];
     }
+
+    public function storeNested(ParentInputData $data): ParentInputData
+    {
+        return $data;
+    }
+
+    public function showChild(): ChildInputData
+    {
+        return ChildInputData::from(['child_name' => 'x']);
+    }
 }

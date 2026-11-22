@@ -93,7 +93,9 @@ php artisan scramble-extras:cache:clear
 
 ## Request bodies vs responses
 
-A `Data` class is often used as both a response and a request body, and the two projections differ — `#[Computed]` is output-only, `#[Hidden]` is input-only, and `Optional` / `#[MapInputName]` change required-ness and field names. To keep both faithful, **request body schemas are inlined** (rendered directly on the operation) instead of `$ref`-ing the shared output component. Response schemas remain reusable `$ref` components.
+A `Data` class is often used as both a response and a request body, and the two projections differ — `#[Computed]` is output-only, `#[Hidden]` is input-only, and `Optional` / `#[MapInputName]` change required-ness and field names. To keep both faithful, **request body schemas are inlined** (rendered directly on the operation) instead of `$ref`-ing the shared output component, and so are `Data` classes nested inside them, each with its own input projection. Response schemas remain reusable `$ref` components. (A `Data` class that contains itself, directly or indirectly, references its component at the point where it recurses.)
+
+On `GET`, `DELETE` and `HEAD` routes, where laravel-data reads the query string, a `Data` argument is documented as one query parameter per property.
 
 ## What's NOT covered (yet)
 

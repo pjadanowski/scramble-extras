@@ -46,6 +46,26 @@ class LaravelDataReflector
      */
     protected array $referencedClasses = [];
 
+    /**
+     * Data classes whose input (request body) schema is being built, outermost
+     * first. While it isn't empty, nested Data are inlined with their own
+     * input projection instead of referencing their output component.
+     *
+     * @var array<int, string>
+     */
+    protected static array $inputStack = [];
+
+    /**
+     * Whether a nested Data class met right now should be inlined as input:
+     * an input schema is being built, and the class isn't already being
+     * built further up (a self-referencing Data would recurse forever; it
+     * falls back to its output component).
+     */
+    public static function shouldInlineAsInput(string $dataClass): bool
+    {
+        return self::$inputStack !== [] && ! in_array($dataClass, self::$inputStack, true);
+    }
+
     public function __construct(
         protected TypeTransformer $openApiTransformer,
         protected Components $components,
@@ -58,10 +78,35 @@ class LaravelDataReflector
         // request body, where Scramble re-assembles the object from its
         // `properties` - which a cached, array-backed schema doesn't have.
         // They are cheap to rebuild anyway.
-        $cache = $input ? null : $this->cache();
+        if ($input) {
+            self::$inputStack[] = $dataClass;
+
+            try {
+                return $this->doBuildSchema($dataClass, true);
+            } finally {
+                array_pop(self::$inputStack);
+            }
+        }
+
+        // An output component can be built from inside an input schema (a
+        // self-referencing Data falls back to its component): its own nested
+        // Data must reference output components, so suspend input mode.
+        $suspendedInputStack = self::$inputStack;
+        self::$inputStack = [];
+
+        try {
+            return $this->buildOutputSchema($dataClass);
+        } finally {
+            self::$inputStack = $suspendedInputStack;
+        }
+    }
+
+    protected function buildOutputSchema(string $dataClass): OpenApiObjectType
+    {
+        $cache = $this->cache();
 
         if ($cache === null) {
-            return $this->doBuildSchema($dataClass, $input);
+            return $this->doBuildSchema($dataClass, false);
         }
 
         $key = $dataClass.'.out';
@@ -76,7 +121,7 @@ class LaravelDataReflector
             return new CachedSchemaType($entry['array']);
         }
 
-        $schema = $this->doBuildSchema($dataClass, $input);
+        $schema = $this->doBuildSchema($dataClass, false);
 
         $cache->put($key, [
             'fingerprint' => $fingerprint,
@@ -243,6 +288,37 @@ class LaravelDataReflector
         }
 
         return $deps;
+    }
+
+    /**
+     * Scramble's TypeTransformer caches results by type name, so the input
+     * schema of a nested Data and its output reference would be served for
+     * each other. While building an input schema, every object type is
+     * tagged with an attribute, which makes the transformer skip its cache.
+     */
+    protected function bypassTransformCacheForInput(\Dedoc\Scramble\Support\Type\Type $type): \Dedoc\Scramble\Support\Type\Type
+    {
+        if (self::$inputStack === []) {
+            return $type;
+        }
+
+        if ($type instanceof ScrambleObjectType) {
+            $type->setAttribute('scramble-extras:input', true);
+
+            if ($type instanceof \Dedoc\Scramble\Support\Type\Generic) {
+                array_map($this->bypassTransformCacheForInput(...), $type->templateTypes);
+            }
+        } elseif ($type instanceof \Dedoc\Scramble\Support\Type\ArrayType) {
+            $this->bypassTransformCacheForInput($type->value);
+        } elseif ($type instanceof \Dedoc\Scramble\Support\Type\Union) {
+            array_map($this->bypassTransformCacheForInput(...), $type->types);
+        } elseif ($type instanceof \Dedoc\Scramble\Support\Type\KeyedArrayType) {
+            foreach ($type->items as $item) {
+                $this->bypassTransformCacheForInput($item->value);
+            }
+        }
+
+        return $type;
     }
 
     /**
@@ -464,7 +540,7 @@ class LaravelDataReflector
         $scrambleType = PhpDocTypeHelper::toType($docType);
         $this->collectClasses($scrambleType);
 
-        return $this->openApiTransformer->transform($scrambleType);
+        return $this->openApiTransformer->transform($this->bypassTransformCacheForInput($scrambleType));
     }
 
     protected function resolveClassType(string $className): OpenApiType
@@ -475,7 +551,9 @@ class LaravelDataReflector
 
         $this->referencedClasses[] = $className;
 
-        return $this->openApiTransformer->transform(new ScrambleObjectType($className));
+        return $this->openApiTransformer->transform(
+            $this->bypassTransformCacheForInput(new ScrambleObjectType($className)),
+        );
     }
 
     /**
