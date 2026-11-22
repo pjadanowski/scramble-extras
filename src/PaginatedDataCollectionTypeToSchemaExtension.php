@@ -24,6 +24,8 @@ use Spatie\LaravelData\PaginatedDataCollection;
  */
 class PaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
 {
+    use ResolvesDataCollectionItems;
+
     public function shouldHandle(Type $type): bool
     {
         if ($type instanceof Generic && is_a($type->name, PaginatedDataCollection::class, true)) {
@@ -55,40 +57,6 @@ class PaginatedDataCollectionTypeToSchemaExtension extends TypeToSchemaExtension
         return Response::make(200)
             ->description('Paginated set of data')
             ->setContent('application/json', Schema::fromType($schema));
-    }
-
-    /**
-     * The item type is always the last template parameter: spatie/laravel-data
-     * declares these collections as `<TKey of array-key, TValue>` (matching
-     * Illuminate\Support\Collection), so a spec-correct two-argument generic
-     * like `PaginatedDataCollection<int, ProductData>` carries the Data class
-     * at index 1, not 0. Flow-inferred generics (no docblock, resolved from a
-     * `Data::collect()` call) only ever carry the single value type, at index 0
-     * — which is also "last" — so this covers both shapes.
-     */
-    protected function getItemClass(Type $type): ?string
-    {
-        if (! $type instanceof Generic || $type->templateTypes === []) {
-            return null;
-        }
-
-        $inner = end($type->templateTypes);
-
-        if ($inner instanceof ScrambleObjectType && class_exists($inner->name)) {
-            return $inner->name;
-        }
-
-        return null;
-    }
-
-    protected function getItemSchema(Type $type): OpenApiType
-    {
-        $itemClass = $this->getItemClass($type);
-        if ($itemClass === null) {
-            return new OpenApiObjectType;
-        }
-
-        return $this->openApiTransformer->transform(new ScrambleObjectType($itemClass));
     }
 
     /**

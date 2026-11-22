@@ -27,7 +27,7 @@ class LaravelDataReturnTypeExtension implements StaticMethodReturnTypeExtension
 {
     public function shouldHandle(string $name): bool
     {
-        return is_string($name) && class_exists($name) && is_a($name, BaseData::class, true);
+        return class_exists($name) && is_a($name, BaseData::class, true);
     }
 
     public function getStaticMethodReturnType(StaticMethodCallEvent $event): ?Type
