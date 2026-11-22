@@ -37,9 +37,32 @@ class ConstrainedNumberType extends NumberType
         return $this;
     }
 
+    /**
+     * Scramble serializes through serializeAs31()/serializeAs32() (older
+     * versions through toArray()), so the extra keywords go into all three.
+     */
     public function toArray()
     {
-        return array_merge(parent::toArray(), array_filter([
+        return $this->withConstraints(parent::toArray());
+    }
+
+    public function serializeAs31(): mixed
+    {
+        return $this->withConstraints(parent::serializeAs31());
+    }
+
+    public function serializeAs32(): mixed
+    {
+        return $this->withConstraints(parent::serializeAs32());
+    }
+
+    /**
+     * @param  array<string, mixed>  $array
+     * @return array<string, mixed>
+     */
+    private function withConstraints(array $array): array
+    {
+        return array_merge($array, array_filter([
             'exclusiveMinimum' => $this->exclusiveMin,
             'exclusiveMaximum' => $this->exclusiveMax,
             'multipleOf' => $this->multipleOf,
