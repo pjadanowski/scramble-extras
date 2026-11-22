@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [HishamM1/scramble-extras](https://github.com/HishamM1/scramble-extras).
 
 ### Fixed
+- **Data classes with `rules()`** got a second request body: Scramble takes
+  any class with `rules()` for a form request, so the body became an
+  `allOf` of the Data schema and a stray FQCN-named component. The
+  constraints from `rules()` (as Scramble maps them) are now folded into
+  the Data schema, for request bodies and query parameters alike. Needs a
+  Scramble version with `FormRequestParametersExtractor::ignoreInstanceOf()`;
+  older versions keep the `allOf`.
 - **`$data->toResponse($request)`** (also on collections) was documented as
   a string response. It now documents the Data or collection schema and
   keeps a changed status code. Ported from HishamM1/scramble-extras.

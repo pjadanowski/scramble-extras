@@ -38,7 +38,7 @@ class LaravelDataParametersExtractor implements ParameterExtractor
                 continue;
             }
 
-            $parameterExtractionResults[] = $this->buildResult($dataClass, $this->httpMethod($routeInfo));
+            $parameterExtractionResults[] = $this->buildResult($dataClass, $routeInfo);
         }
 
         return $parameterExtractionResults;
@@ -76,7 +76,7 @@ class LaravelDataParametersExtractor implements ParameterExtractor
             : null;
     }
 
-    protected function buildResult(string $dataClass, string $httpMethod): ParametersExtractionResult
+    protected function buildResult(string $dataClass, RouteInfo $routeInfo): ParametersExtractionResult
     {
         $reflector = new LaravelDataReflector(
             $this->openApiTransformer,
@@ -84,6 +84,8 @@ class LaravelDataParametersExtractor implements ParameterExtractor
         );
 
         $schema = $reflector->buildSchema($dataClass, input: true);
+        (new DataRulesSchemaMerger($this->openApiTransformer))->merge($schema, $dataClass, $routeInfo);
+        $httpMethod = $this->httpMethod($routeInfo);
 
         // Without a request body, laravel-data fills the Data object from the
         // query string, so each property is its own query parameter.
