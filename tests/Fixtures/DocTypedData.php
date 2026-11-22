@@ -23,5 +23,7 @@ class DocTypedData extends Data
         public array $people,
         public int|string $identifier = 0,
         public int|PlainData $ownerOrId = 0,
+        public int|string|null $maybeIdentifier = null,
+        public PlainData|ChildInputData|null $maybeOwner = null,
     ) {}
 }

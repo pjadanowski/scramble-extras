@@ -62,4 +62,13 @@ class DocblockTypesTest extends TestCase
         $this->assertStringContainsString('integer', $ownerOrId);
         $this->assertStringContainsString('#/components/schemas/PlainData', $ownerOrId);
     }
+
+    #[Test]
+    public function native_union_types_with_null_stay_nullable(): void
+    {
+        $properties = $this->properties();
+
+        $this->assertStringContainsString('null', json_encode($properties['maybeIdentifier']));
+        $this->assertStringContainsString('null', json_encode($properties['maybeOwner']));
+    }
 }

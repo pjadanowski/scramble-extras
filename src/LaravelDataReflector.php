@@ -540,8 +540,8 @@ class LaravelDataReflector
     }
 
     /**
-     * A native union (`int|string`, `int|FooData`) documents every member;
-     * nullability is applied separately.
+     * A native union (`int|string`, `int|FooData|null`) documents every
+     * member, null included.
      *
      * @param  ReflectionNamedType[]  $types
      */
@@ -556,7 +556,9 @@ class LaravelDataReflector
                 'bool', 'true', 'false' => new \Dedoc\Scramble\Support\Type\BooleanType,
                 'float' => new \Dedoc\Scramble\Support\Type\FloatType,
                 'array' => new \Dedoc\Scramble\Support\Type\ArrayType,
-                'null', 'mixed' => null,
+                // Kept as a member: Scramble's anyOf ignores nullable().
+                'null' => new \Dedoc\Scramble\Support\Type\NullType,
+                'mixed' => null,
                 default => class_exists($type->getName()) || enum_exists($type->getName())
                     ? new ScrambleObjectType($type->getName())
                     : null,
