@@ -47,11 +47,28 @@ class QueryBuilderOperationExtension extends OperationExtension
             return;
         }
 
-        $params = $this->buildParameters($finder);
+        // A parameter the route already documents (a #[QueryParameter]
+        // attribute, a Data property) is more specific than the generic one
+        // derived here, so it wins instead of being listed twice.
+        $params = array_values(array_filter(
+            $this->buildParameters($finder),
+            fn (Parameter $new) => ! $this->isDocumented($operation, $new),
+        ));
 
         if ($params !== []) {
             $operation->addParameters($params);
         }
+    }
+
+    protected function isDocumented(Operation $operation, Parameter $parameter): bool
+    {
+        foreach ($operation->parameters as $existing) {
+            if ($existing instanceof Parameter && $existing->name === $parameter->name && $existing->in === $parameter->in) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     protected function makeNameResolver(RouteInfo $routeInfo): ?FileNameResolver

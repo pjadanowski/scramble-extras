@@ -2,6 +2,7 @@
 
 namespace PawelJadanowski\ScrambleExtras\Tests\Fixtures;
 
+use Dedoc\Scramble\Attributes\QueryParameter;
 use Spatie\LaravelData\CursorPaginatedDataCollection;
 use Spatie\LaravelData\PaginatedDataCollection;
 use Spatie\QueryBuilder\AllowedFilter;
@@ -14,6 +15,12 @@ use Spatie\QueryBuilder\QueryBuilder;
  */
 class ReviewController
 {
+    #[QueryParameter('filter[name]', description: 'Exact name.', type: 'string')]
+    public function documented()
+    {
+        return QueryBuilder::for(User::class)->allowedFilters('name', 'email')->get();
+    }
+
     public function constraints(): ConstraintsData
     {
         return ConstraintsData::from([]);
