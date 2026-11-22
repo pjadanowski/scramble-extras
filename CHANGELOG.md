@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented with a different meaning.
 
 ### Removed
+- **Laravel 11 support.** Every 11.x release has unpatched security
+  advisories, so it can no longer be installed or tested.
 - `DataClassNameRegistry` (internal; no longer used by the cache).
 
 ## [0.5.0] - 2026-11-22

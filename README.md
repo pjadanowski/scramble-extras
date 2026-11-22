@@ -17,7 +17,7 @@ A free, open Laravel package that adds full **Spatie ecosystem** support to [ded
 ## Requirements
 
 - PHP 8.2+
-- Laravel 11, 12, or 13 (CI tests 12 and 13)
+- Laravel 12 or 13
 - `dedoc/scramble` ^0.13.0
 - `spatie/laravel-data` ^4.0
 - optionally `spatie/laravel-query-builder` (tested with 6.x and 7.x)
