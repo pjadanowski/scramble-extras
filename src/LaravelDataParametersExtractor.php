@@ -3,8 +3,12 @@
 namespace PawelJadanowski\ScrambleExtras;
 
 use Dedoc\Scramble\Support\Generator\Parameter;
+use Dedoc\Scramble\Support\Generator\Reference;
 use Dedoc\Scramble\Support\Generator\Schema;
+use Dedoc\Scramble\Support\Generator\Types\ArrayType as OpenApiArrayType;
 use Dedoc\Scramble\Support\Generator\Types\ObjectType as OpenApiObjectType;
+use Dedoc\Scramble\Support\Generator\Types\StringType as OpenApiStringType;
+use Dedoc\Scramble\Support\Generator\Types\Type as OpenApiType;
 use Dedoc\Scramble\Support\Generator\TypeTransformer;
 use Dedoc\Scramble\Support\OperationExtensions\ParameterExtractor\ParameterExtractor;
 use Dedoc\Scramble\Support\OperationExtensions\RulesExtractor\ParametersExtractionResult;
@@ -38,7 +42,7 @@ class LaravelDataParametersExtractor implements ParameterExtractor
                 continue;
             }
 
-            $parameterExtractionResults[] = $this->buildResult($dataClass, $this->httpMethod($routeInfo));
+            $parameterExtractionResults[] = $this->buildResult($dataClass, $routeInfo);
         }
 
         return $parameterExtractionResults;
@@ -76,7 +80,7 @@ class LaravelDataParametersExtractor implements ParameterExtractor
             : null;
     }
 
-    protected function buildResult(string $dataClass, string $httpMethod): ParametersExtractionResult
+    protected function buildResult(string $dataClass, RouteInfo $routeInfo): ParametersExtractionResult
     {
         $reflector = new LaravelDataReflector(
             $this->openApiTransformer,
@@ -84,6 +88,8 @@ class LaravelDataParametersExtractor implements ParameterExtractor
         );
 
         $schema = $reflector->buildSchema($dataClass, input: true);
+        (new DataRulesSchemaMerger($this->openApiTransformer))->merge($schema, $dataClass, $routeInfo);
+        $httpMethod = $this->httpMethod($routeInfo);
 
         // Without a request body, laravel-data fills the Data object from the
         // query string, so each property is its own query parameter.
@@ -92,6 +98,10 @@ class LaravelDataParametersExtractor implements ParameterExtractor
                 parameters: $this->queryParameters($schema),
                 schemaName: null,
             );
+        }
+
+        if ($this->containsFile($schema)) {
+            $schema = $this->flattenForMultipart($schema);
         }
 
         $body = (new Parameter('*', 'body'))
@@ -110,6 +120,76 @@ class LaravelDataParametersExtractor implements ParameterExtractor
             parameters: [$body],
             schemaName: null,
         );
+    }
+
+    protected function containsFile(OpenApiType $type): bool
+    {
+        if ($type instanceof OpenApiStringType && $type->format === 'binary') {
+            return true;
+        }
+
+        if ($type instanceof OpenApiArrayType && $type->items instanceof OpenApiType) {
+            return $this->containsFile($type->items);
+        }
+
+        if ($type instanceof OpenApiObjectType) {
+            foreach ($type->properties as $property) {
+                if ($property instanceof OpenApiType && $this->containsFile($property)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * A multipart body carries flat form fields, so nested values take the
+     * bracket keys PHP parses back into arrays: `address[city]` for an
+     * object's fields and `tags[]` for a list of scalars or files. A nested
+     * field is required only when every object above it is. Lists of
+     * objects keep their schema: their keys need an index.
+     */
+    protected function flattenForMultipart(OpenApiObjectType $schema): OpenApiObjectType
+    {
+        $flat = new OpenApiObjectType;
+        $required = [];
+
+        $this->flattenInto($flat, $required, $schema, '', true);
+
+        $flat->setRequired($required);
+        if ($schema->description !== '') {
+            $flat->setDescription($schema->description);
+        }
+
+        return $flat;
+    }
+
+    /**
+     * @param  string[]  $required
+     */
+    protected function flattenInto(OpenApiObjectType $flat, array &$required, OpenApiObjectType $schema, string $prefix, bool $parentRequired): void
+    {
+        foreach ($schema->properties as $name => $type) {
+            $key = $prefix === '' ? $name : "{$prefix}[{$name}]";
+            $isRequired = $parentRequired && in_array($name, $schema->required, true);
+
+            if ($type instanceof OpenApiObjectType && $type->properties !== []) {
+                $this->flattenInto($flat, $required, $type, $key, $isRequired);
+
+                continue;
+            }
+
+            if ($type instanceof OpenApiArrayType && ! $type->items instanceof OpenApiObjectType && ! $type->items instanceof Reference) {
+                $key .= '[]';
+            }
+
+            $flat->addProperty($key, $type);
+
+            if ($isRequired) {
+                $required[] = $key;
+            }
+        }
     }
 
     /**

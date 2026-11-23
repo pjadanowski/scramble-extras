@@ -21,6 +21,7 @@ class QueryBuilderBuildersTest extends TestCase
     {
         $router->get('api/orders', [ReviewController::class, 'orders']);
         $router->get('api/includes', [ReviewController::class, 'includes']);
+        $router->get('api/documented', [ReviewController::class, 'documented']);
     }
 
     /**
@@ -94,5 +95,17 @@ class QueryBuilderBuildersTest extends TestCase
 
         $this->assertStringContainsString('`customerTotal`', $description);
         $this->assertStringContainsString('`customerPresent`', $description);
+    }
+
+    #[Test]
+    public function an_already_documented_parameter_is_not_listed_twice(): void
+    {
+        $result = app(Generator::class)();
+        $parameters = (is_array($result) ? $result : $result->toArray())['paths']['/documented']['get']['parameters'];
+        $names = array_column($parameters, 'name');
+
+        $this->assertSame(1, count(array_keys($names, 'filter[name]', true)));
+        $this->assertContains('filter[email]', $names);
+        $this->assertSame('Exact name.', collect($parameters)->firstWhere('name', 'filter[name]')['description']);
     }
 }

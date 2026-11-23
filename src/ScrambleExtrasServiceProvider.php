@@ -5,6 +5,7 @@ namespace PawelJadanowski\ScrambleExtras;
 use Dedoc\Scramble\Configuration\OperationTransformers;
 use Dedoc\Scramble\Configuration\ParametersExtractors;
 use Dedoc\Scramble\Scramble;
+use Dedoc\Scramble\Support\OperationExtensions\ParameterExtractor\FormRequestParametersExtractor;
 use Illuminate\Support\ServiceProvider;
 use PawelJadanowski\ScrambleExtras\Console\Commands\ClearSchemaCacheCommand;
 
@@ -51,10 +52,21 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             PaginatedDataCollectionTypeToSchemaExtension::class,
             CursorPaginatedDataCollectionTypeToSchemaExtension::class,
             DataCollectionTypeToSchemaExtension::class,
+            UploadedFileTypeToSchemaExtension::class,
             LaravelDataReturnTypeExtension::class,
+            LaravelDataResponseMethodReturnTypeExtension::class,
         ];
 
         Scramble::registerExtensions($extensions);
+
+        // Scramble takes any class with a rules() method for a form request,
+        // so a Data class with rules() got a second, rules-only request body
+        // (an allOf with a stray component). LaravelDataParametersExtractor
+        // folds those rules into the Data schema instead. ignoreInstanceOf()
+        // is missing on older Scramble versions, which keep the allOf.
+        if (method_exists(FormRequestParametersExtractor::class, 'ignoreInstanceOf')) {
+            FormRequestParametersExtractor::ignoreInstanceOf(\Spatie\LaravelData\Contracts\BaseData::class);
+        }
 
         Scramble::configure()->withParametersExtractors(function (ParametersExtractors $extractors) {
             $extractors->prepend(LaravelDataParametersExtractor::class);
@@ -62,6 +74,9 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
 
         Scramble::configure()->withOperationTransformers(function (OperationTransformers $transformers) {
             $transformers->prepend(LaravelDataValidationExceptionExtension::class);
+            $transformers->append(RouteWhereInParameterExtension::class);
+            $transformers->append(MethodAwareOperationIdExtension::class);
+            $transformers->append(MultipartRequestBodyExtension::class);
 
             // Appended directly rather than via registerExtensions(): Scramble
             // collects OperationExtension classes from Scramble::$extensions
@@ -73,6 +88,10 @@ class ScrambleExtrasServiceProvider extends ServiceProvider
             if (class_exists(\Spatie\QueryBuilder\QueryBuilder::class)) {
                 $transformers->append(QueryBuilderOperationExtension::class);
             }
+
+            // After the query builder, whose jsonPaginate() page[number]
+            // takes precedence over a plain page parameter.
+            $transformers->append(PaginationParametersOperationExtension::class);
         });
 
         // resolveOperationMethodsUsing() doesn't exist before dedoc/scramble

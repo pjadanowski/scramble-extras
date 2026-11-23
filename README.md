@@ -6,12 +6,13 @@ A free, open Laravel package that adds full **Spatie ecosystem** support to [ded
 
 ## Features
 
-- **Spatie Laravel Data** — output and input (request body) schemas auto-generated from your `Data` classes. Honors `MapName`/`MapInputName`/`MapOutputName` and `data.name_mapping_strategy` (names come from laravel-data's own metadata), `Optional`, `Lazy`, `#[Computed]`, `#[Hidden]`, `#[DataCollectionOf]`, and reads `@example`/`@default` from property phpdoc.
+- **Spatie Laravel Data** — output and input (request body) schemas auto-generated from your `Data` classes. Honors `MapName`/`MapInputName`/`MapOutputName` and `data.name_mapping_strategy` (names come from laravel-data's own metadata), `Optional`, `Lazy`, `#[Computed]`, `#[Hidden]`, `#[DataCollectionOf]`, reads `@example`/`@default` from property phpdoc, and adds the constraints of a static `rules()` method to request schemas.
 - **All ~80 Spatie validation attributes → OpenAPI fields** — `#[Email]` → `format: email`, `#[Min(3)]` → `minLength` (`minItems` on arrays), `#[GreaterThan(0)]` → `exclusiveMinimum`, `#[In(...)]` / `#[Enum(SomeEnum::class)]` → `enum`, `#[Regex]` → `pattern`, `#[Image]` → `contentMediaType: image/*`, plus description notes for `#[Same]`, `#[Confirmed]`, `#[Exists]`, `#[RequiredIf]`, etc.
-- **`PaginatedDataCollection<T>`, `CursorPaginatedDataCollection<T>`, `DataCollection<T>`** — the response envelopes laravel-data actually returns (`data` + `links` + `meta`, for length-aware and cursor pagination) / plain array.
-- **Spatie Laravel Query Builder** — `allowedFilters` / `allowedSorts` / `allowedIncludes` / `allowedFields` / `defaultSort` / `jsonPaginate()` parsed via AST, including `AllowedFilter::*` / `AllowedSort::*` / `AllowedInclude::*` builders with chained modifiers and the implicit `{relation}Count` / `{relation}Exists` includes. `AllowedFilter::exact($column)` on an enum-cast Eloquent column (`$casts` or `casts()`) emits `enum: [...]` automatically.
+- **`PaginatedDataCollection<T>`, `CursorPaginatedDataCollection<T>`, `DataCollection<T>`** — the response envelopes laravel-data actually returns (`data` + `links` + `meta`, for length-aware and cursor pagination) / plain array, plus the `page` / `cursor` query parameter they read.
+- **Spatie Laravel Query Builder** — `allowedFilters` / `allowedSorts` / `allowedIncludes` / `allowedFields` / `defaultSort` / `jsonPaginate()` parsed via AST — in the route method, the methods it calls and `QueryBuilder` subclasses it uses, with lists from local variables — including `AllowedFilter::*` / `AllowedSort::*` / `AllowedInclude::*` builders with chained modifiers and the implicit `{relation}Count` / `{relation}Exists` includes. `AllowedFilter::exact($column)` on an enum-cast Eloquent column (`$casts` or `casts()`) emits `enum: [...]` automatically.
 - **Persistent schema cache** — file-based, invalidated per class when its source (or a parent class, trait or attribute-referenced class) changes. `php artisan scramble-extras:cache:clear` to wipe.
 - **422 for `Data`-typed actions** — a controller action type-hinted with a `Data` class is validated the same way a `FormRequest` would be, so it now documents a `422` response the same way core Scramble already does for `FormRequest`.
+- **`whereIn` route constraints** — `Route::whereIn('kind', ['a', 'b'])` (including backed enum cases) documents the path parameter as `enum: [a, b]`, keeping its type and default.
 - **`PATCH` documented alongside `PUT`** — Scramble's default route-methods resolver only documents the first HTTP method a route responds to, so `Route::apiResource()`'s update action (registered for both `PUT` and `PATCH`) only ever got a `put` operation. Opt out with `SCRAMBLE_EXTRAS_EXPAND_ROUTE_METHODS=false`. Requires a `dedoc/scramble` version with `GeneratorConfig::resolveOperationMethodsUsing()` (added after this package's 0.13.0 floor); on older installs this feature is a no-op rather than an error.
 
 ## Requirements
@@ -97,13 +98,14 @@ php artisan scramble-extras:cache:clear
 
 A `Data` class is often used as both a response and a request body, and the two projections differ — `#[Computed]` is output-only, `#[Hidden]` is input-only, and `Optional` / `#[MapInputName]` change required-ness and field names. To keep both faithful, **request body schemas are inlined** (rendered directly on the operation) instead of `$ref`-ing the shared output component, and so are `Data` classes nested inside them, each with its own input projection. Response schemas remain reusable `$ref` components. (A `Data` class that contains itself, directly or indirectly, references its component at the point where it recurses.)
 
+A `Data` class with `UploadedFile` properties is documented as a `multipart/form-data` body: files are binary fields, and nested values use the bracket keys PHP parses back into arrays (`address[city]`, `tags[]`).
+
 On `GET`, `DELETE` and `HEAD` routes, where laravel-data reads the query string, a `Data` argument is documented as one query parameter per property.
 
 ## What's NOT covered (yet)
 
 Long-tail features still on the roadmap:
 
-- `multipart/form-data` request bodies for `Data` classes containing `UploadedFile` properties
 - Sparse fieldsets rendered as proper enum array params (currently emitted as `string` with allowed values in the description)
 - Polymorphic `Data` with discriminator schemas
 

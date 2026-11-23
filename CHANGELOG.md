@@ -7,7 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **File uploads.** `UploadedFile` properties are binary fields (they were
+  `type: object`), and a `Data` body containing one is
+  `multipart/form-data` with bracket keys for nested values
+  (`address[city]`, `tags[]`). Files narrowed by `#[Image]` count too.
+  Idea from HishamM1/scramble-extras.
+- **`page` / `cursor` query parameters** for GET routes returning a
+  `PaginatedDataCollection` / `CursorPaginatedDataCollection` (also through
+  `->toResponse($request)`), unless the operation already documents one.
+  Idea from HishamM1/scramble-extras.
+- **Query builder configuration outside the route method** is documented:
+  lists held in local variables (`->allowedFilters($filters)`, including
+  `...$sorts`), query builders set up in methods the route calls
+  (`$this->query()`, `self::` / `static::`), and `QueryBuilder` subclasses
+  that configure themselves (`new UserListQuery`, `UserListQuery::make()`),
+  including their model from `parent::__construct(User::query())` for enum
+  casts. Idea from HishamM1/scramble-extras.
+- **`whereIn` route constraints** become an enum on the matching path
+  parameter, keeping its type (string or integer) and default.
+  `Route::whereIn('kind', ['a', 'b'])` and backed enum cases are handled;
+  other `where()` patterns are left alone. Ported from
+  [HishamM1/scramble-extras](https://github.com/HishamM1/scramble-extras).
+
 ### Fixed
+- **Date formats from transformers and casts.** A `Carbon` property was
+  always documented as `date-time`. It now follows the format laravel-data
+  really uses: `#[WithTransformer(DateTimeInterfaceTransformer::class,
+  format: ...)]` for responses, `#[WithCast(DateTimeInterfaceCast::class,
+  format: ...)]` for requests, otherwise `config('data.date_format')`
+  (`Y-m-d` → `date`; formats without an OpenAPI equivalent become a note).
+  Idea from HishamM1/scramble-extras.
+- **Data classes with `rules()`** got a second request body: Scramble takes
+  any class with `rules()` for a form request, so the body became an
+  `allOf` of the Data schema and a stray FQCN-named component. The
+  constraints from `rules()` (as Scramble maps them) are now folded into
+  the Data schema, for request bodies and query parameters alike. Needs a
+  Scramble version with `FormRequestParametersExtractor::ignoreInstanceOf()`;
+  older versions keep the `allOf`.
+- **`$data->toResponse($request)`** (also on collections) was documented as
+  a string response. It now documents the Data or collection schema and
+  keeps a changed status code. Ported from HishamM1/scramble-extras.
+- **Query parameters listed twice.** A query-builder parameter the route
+  already documents (a `#[QueryParameter]` attribute, a `Data` property) is
+  no longer added a second time; the existing one wins. Ported from
+  HishamM1/scramble-extras.
+- **Operation ids of PUT/PATCH routes.** Documenting both methods gave them
+  clashing ids, which Scramble replaced with long class-based ones
+  (`…user.update_0` / `…user.update_1`). The first method keeps the plain
+  id, the others get a method suffix (`user.update.patch`). Ported from
+  HishamM1/scramble-extras.
 - **Schema cache served broken and stale schemas.** With the cache on (the
   default), a warm cache stripped all properties from components and
   request bodies, and its entries were effectively never reused. Only

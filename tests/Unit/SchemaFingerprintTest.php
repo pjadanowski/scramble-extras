@@ -59,4 +59,33 @@ class SchemaFingerprintTest extends TestCase
             clearstatcache(true, $file);
         }
     }
+
+    /**
+     * @return array<string, array{string, mixed}>
+     */
+    public static function configs(): array
+    {
+        return [
+            'name mapping strategy' => ['data.name_mapping_strategy.output', 'snake_case'],
+            'date format' => ['data.date_format', 'Y-m-d'],
+        ];
+    }
+
+    #[Test]
+    #[DataProvider('configs')]
+    public function fingerprint_changes_when_a_config_it_depends_on_changes(string $key, mixed $value): void
+    {
+        $reflector = new class($this->createStub(TypeTransformer::class), new Components) extends LaravelDataReflector
+        {
+            public function fingerprintOf(string $class): string
+            {
+                return $this->fingerprint($class);
+            }
+        };
+
+        $before = $reflector->fingerprintOf(InheritedData::class);
+        config([$key => $value]);
+
+        $this->assertNotSame($before, $reflector->fingerprintOf(InheritedData::class));
+    }
 }

@@ -2,6 +2,7 @@
 
 namespace PawelJadanowski\ScrambleExtras\Tests\Fixtures;
 
+use Dedoc\Scramble\Attributes\QueryParameter;
 use Spatie\LaravelData\CursorPaginatedDataCollection;
 use Spatie\LaravelData\PaginatedDataCollection;
 use Spatie\QueryBuilder\AllowedFilter;
@@ -14,6 +15,12 @@ use Spatie\QueryBuilder\QueryBuilder;
  */
 class ReviewController
 {
+    #[QueryParameter('filter[name]', description: 'Exact name.', type: 'string')]
+    public function documented()
+    {
+        return QueryBuilder::for(User::class)->allowedFilters('name', 'email')->get();
+    }
+
     public function constraints(): ConstraintsData
     {
         return ConstraintsData::from([]);
@@ -31,6 +38,24 @@ class ReviewController
 
     public function paginated()
     {
+        return PlainData::collect([], PaginatedDataCollection::class);
+    }
+
+    public function paginatedResponse(\Illuminate\Http\Request $request)
+    {
+        return PlainData::collect([], PaginatedDataCollection::class)->toResponse($request);
+    }
+
+    #[QueryParameter('page', description: 'Page to show.', type: 'int')]
+    public function paginatedDocumented()
+    {
+        return PlainData::collect([], PaginatedDataCollection::class);
+    }
+
+    public function paginatedJson()
+    {
+        QueryBuilder::for(Order::class)->jsonPaginate();
+
         return PlainData::collect([], PaginatedDataCollection::class);
     }
 
